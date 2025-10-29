@@ -1,13 +1,16 @@
 from typing import Callable
 
+import corner
 import matplotlib.pyplot as plt
 import numpy as np
 from sequince import ParticleState, SequentialMonteCarlo
+from sequince.logging_utils import configure_logging
 from sequince.steps import (
     AdaptiveTemperedWeighting,
     ContinueWhile,
     DimensionalityExpansion,
     EmceeMutation,
+    LoggingStep,
     SystematicResampling,
 )
 from sequince.steps.base import StepContext
@@ -169,18 +172,36 @@ def make_continue_annealing_predicate(
     return predicate
 
 
+def logging_str_fn(state: ParticleState, context: StepContext) -> str:
+    temperature = context.static["temperature"]
+    n_pulses = context.static["n_pulses"]
+    ess = state.effective_sample_size()
+    n_particles = state.log_weights.shape[0]
+    ess_ratio = ess / n_particles if n_particles else 0.0
+    log_evidence = state.log_evidence
+    return (
+        f"it {context.t}:, "
+        f"Temperature: {temperature:.4f}, "
+        f"Pulses: {n_pulses}, "
+        f"ESS: {ess:.1f} ({ess_ratio:.3f}), "
+        f"Log Evidence: {log_evidence:.1f}"
+    )
+
+
 def main():
+    configure_logging(level="INFO")
+
     rng = np.random.default_rng(1751)
 
     bounds = np.array(
         [
-            [0.5, 1.5],
+            [1e-3, 1.5],
             [1, 4],
-            [0.5, 1],
+            [0.1, 1],
         ]
     ).T
 
-    n_pulses = 3
+    n_pulses = 8
 
     A_true, mu_true, sigma_true = rng.uniform(
         bounds[0], bounds[1], (n_pulses, 3)
@@ -192,7 +213,7 @@ def main():
 
     signals = gauss(xdata[:, None], A_true, mu_true, sigma_true)
 
-    sigma = 1e-2
+    sigma = 1e-1
 
     signal_tot = signals.sum(1)
     noise = sigma * rng.normal(size=xdata.shape)
@@ -203,7 +224,7 @@ def main():
     plt.plot(xdata, signal_tot)
     plt.plot(xdata, signals, alpha=0.5, c="k")
 
-    target_n_pulses = 4
+    target_n_pulses = 12
     trigger_temperature = 0.999
 
     smc = SequentialMonteCarlo(
@@ -225,6 +246,7 @@ def main():
                 vectorize=True,
                 run_kwargs={"skip_initial_state_check": True},
             ),
+            LoggingStep(str_fn=logging_str_fn, frequency=5),
             ContinueWhile(
                 make_continue_annealing_predicate(
                     target_pulses=target_n_pulses,
@@ -349,19 +371,41 @@ def main():
     print("Log Prior:", log_priors[max_post_idx])
     print("Log Posterior:", log_posteriors[max_post_idx])
 
-    max_template = gauss(
+    max_templates = gauss(
         xdata[:, None],
         particles_reshaped[max_post_idx, 0, :],
         particles_reshaped[max_post_idx, 1, :],
         particles_reshaped[max_post_idx, 2, :],
-    ).sum(-1)
+    )
+    max_template = max_templates.sum(-1)
 
     fig = plt.figure()
     plt.plot(xdata, ydata, alpha=0.3, label="Data")
     plt.plot(xdata, max_template, c="C1", lw=2, label="MAP template")
+    for template in max_templates.T:
+        plt.plot(xdata, template, c="k", alpha=0.3)
+    for signal in signals.T:
+        plt.plot(xdata, signal, c="red", alpha=0.1, ls="--")
     plt.legend()
     plt.title("Posterior Predictive")
     fig.savefig("fit.png")
+
+    labels = []
+    for i in range(preferred_n_pulses):
+        labels.append(f"A_{i + 1}")
+        labels.append(f"mu_{i + 1}")
+        labels.append(f"sigma_{i + 1}")
+    fig = corner.corner(
+        posterior_samples,
+        labels=labels,
+        show_titles=True,
+        title_fmt=".2f",
+        quantiles=[0.16, 0.5, 0.84],
+        smooth=0.9,
+        color="C0",
+        density=True,
+    )
+    fig.savefig("posterior_corner.png")
 
 
 if __name__ == "__main__":
