@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from sequince import ParticleState, SequentialMonteCarlo
 from sequince.logging_utils import configure_logging
+from sequince.posterior import TemperedPosterior
 from sequince.steps import (
     AdaptiveTemperedWeighting,
     ContinueWhile,
@@ -88,13 +89,6 @@ def log_prior(particles, context):
         )
         log_prior[~in_amplitude_bounds] = -np.inf
     return log_prior
-
-
-def tempered_log_posterior(state, context):
-    temperature = context.static["temperature"]
-    logp = log_prior(state, context)
-    logl = log_likelihood(state, context)
-    return temperature * logl + logp
 
 
 def component_sampler(state, context, rng):
@@ -201,7 +195,7 @@ def main():
         ]
     ).T
 
-    n_pulses = 8
+    n_pulses = 5
 
     A_true, mu_true, sigma_true = rng.uniform(
         bounds[0], bounds[1], (n_pulses, 3)
@@ -224,8 +218,13 @@ def main():
     plt.plot(xdata, signal_tot)
     plt.plot(xdata, signals, alpha=0.5, c="k")
 
-    target_n_pulses = 12
+    target_n_pulses = 6
     trigger_temperature = 0.999
+
+    tempered_posterior = TemperedPosterior(
+        log_likelihood=log_likelihood,
+        log_prior=log_prior,
+    )
 
     smc = SequentialMonteCarlo(
         steps=[
@@ -234,14 +233,14 @@ def main():
                 trigger_temperature=trigger_temperature,
             ),
             AdaptiveTemperedWeighting(
-                log_likelihood,
+                tempered_posterior,
                 target_ess_ratio=0.8,
                 max_temperature=1.0,
                 min_delta=1e-8,
             ),
             SystematicResampling(always_resample=True),
             EmceeMutation(
-                tempered_log_posterior,
+                tempered_posterior,
                 n_steps=10,
                 vectorize=True,
                 run_kwargs={"skip_initial_state_check": True},
