@@ -1,3 +1,4 @@
+import pathlib
 from typing import Callable
 
 import corner
@@ -10,8 +11,8 @@ from sequince.steps import (
     AdaptiveTemperedWeighting,
     ContinueWhile,
     DimensionalityExpansion,
-    EmceeMutation,
     LoggingStep,
+    MiniPCNMutation,
     SystematicResampling,
 )
 from sequince.steps.base import StepContext
@@ -31,9 +32,9 @@ def component_view(particles):
 
 
 def log_likelihood(particles, context):
-    xdata = context.static["data_x"]
-    ydata = context.static["data_y"]
-    sigma = context.static["sigma"]
+    xdata = context.shared["data_x"]
+    ydata = context.shared["data_y"]
+    sigma = context.shared["sigma"]
     particles = component_view(particles)
     templates = gauss(
         xdata[:, None, None],
@@ -50,9 +51,9 @@ def log_likelihood(particles, context):
 
 def log_prior(particles, context):
     """Uniform prior on means, amplitudes and scales"""
-    mean_bounds = context.static.get("mean_bounds", None)
-    scale_bounds = context.static.get("scale_bounds", None)
-    amplitude_bounds = context.static.get("amplitude_bounds", None)
+    mean_bounds = context.shared.get("mean_bounds", None)
+    scale_bounds = context.shared.get("scale_bounds", None)
+    amplitude_bounds = context.shared.get("amplitude_bounds", None)
 
     n_pulses = particles.shape[1] // 3
 
@@ -94,9 +95,9 @@ def log_prior(particles, context):
 def component_sampler(state, context, rng):
     """Sample new components from the prior."""
     n_particles = state.particles.shape[0]
-    mean_bounds = context.static["mean_bounds"]
-    scale_bounds = context.static["scale_bounds"]
-    amplitude_bounds = context.static["amplitude_bounds"]
+    mean_bounds = context.shared["mean_bounds"]
+    scale_bounds = context.shared["scale_bounds"]
+    amplitude_bounds = context.shared["amplitude_bounds"]
 
     new_means = rng.uniform(
         mean_bounds[0], mean_bounds[1], size=(n_particles, 1)
@@ -133,10 +134,10 @@ class TemperatureTriggeredExpansion(DimensionalityExpansion):
         self.trigger_temperature = trigger_temperature
 
     def should_expand(self, context) -> bool:
-        temperature = context.static["temperature"]
+        temperature = context.shared["temperature"]
         trigger_temperature = self.trigger_temperature
         current_pulses = (
-            context.static["dimensions"] // self._expected_block_size
+            context.shared["dimensions"] // self._expected_block_size
         )
         return (temperature >= trigger_temperature) and (
             current_pulses < self.target_pulses
@@ -146,8 +147,8 @@ class TemperatureTriggeredExpansion(DimensionalityExpansion):
         if not self.should_expand(context):
             return state
         state = super().apply(state, context, rng)
-        context.static["n_pulses"] = context.static["dimensions"] // 3
-        state.metadata["n_pulses"] = context.static["n_pulses"]
+        context.shared["n_pulses"] = context.shared["dimensions"] // 3
+        state.metadata["n_pulses"] = context.shared["n_pulses"]
         return state
 
 
@@ -156,8 +157,8 @@ def make_continue_annealing_predicate(
     trigger_temperature: float = 0.999,
 ) -> Callable:
     def predicate(state, context) -> bool:
-        temperature = context.static["temperature"]
-        current_pulses = context.static["dimensions"] // 3
+        temperature = context.shared["temperature"]
+        current_pulses = context.shared["dimensions"] // 3
         continue_annealing = (current_pulses < target_pulses) or (
             temperature < trigger_temperature
         )
@@ -167,8 +168,8 @@ def make_continue_annealing_predicate(
 
 
 def logging_str_fn(state: ParticleState, context: StepContext) -> str:
-    temperature = context.static["temperature"]
-    n_pulses = context.static["n_pulses"]
+    temperature = context.shared["temperature"]
+    n_pulses = context.shared["n_pulses"]
     ess = state.effective_sample_size()
     n_particles = state.log_weights.shape[0]
     ess_ratio = ess / n_particles if n_particles else 0.0
@@ -190,12 +191,17 @@ def main():
     bounds = np.array(
         [
             [1e-3, 1.5],
-            [1, 4],
+            [-4, 4],
             [0.1, 1],
         ]
     ).T
 
-    n_pulses = 5
+    n_pulses = 4
+    target_n_pulses = 6
+    n_particles = 200
+
+    outdir = pathlib.Path("outdir") / f"{n_pulses}_pulses"
+    outdir.mkdir(parents=True, exist_ok=True)
 
     A_true, mu_true, sigma_true = rng.uniform(
         bounds[0], bounds[1], (n_pulses, 3)
@@ -203,7 +209,7 @@ def main():
 
     print(f"True parameters: A={A_true}, mu={mu_true}, sigma={sigma_true}")
 
-    xdata = np.linspace(0, 5, 1001)
+    xdata = np.linspace(-5, 5, 1001)
 
     signals = gauss(xdata[:, None], A_true, mu_true, sigma_true)
 
@@ -218,7 +224,6 @@ def main():
     plt.plot(xdata, signal_tot)
     plt.plot(xdata, signals, alpha=0.5, c="k")
 
-    target_n_pulses = 6
     trigger_temperature = 0.999
 
     tempered_posterior = TemperedPosterior(
@@ -234,16 +239,15 @@ def main():
             ),
             AdaptiveTemperedWeighting(
                 tempered_posterior,
-                target_ess_ratio=0.8,
+                target_ess_ratio=0.6,
                 max_temperature=1.0,
-                min_delta=1e-8,
+                min_delta=1e-4,
             ),
             SystematicResampling(always_resample=True),
-            EmceeMutation(
+            MiniPCNMutation(
                 tempered_posterior,
-                n_steps=10,
-                vectorize=True,
-                run_kwargs={"skip_initial_state_check": True},
+                n_steps=20,
+                step_fn="tpcn",
             ),
             LoggingStep(str_fn=logging_str_fn, frequency=5),
             ContinueWhile(
@@ -260,9 +264,9 @@ def main():
         particles=rng.uniform(
             low=bounds[0],
             high=bounds[1],
-            size=(500, 3),
+            size=(n_particles, 3),
         ),
-        log_weights=np.full(500, -np.log(500)),
+        log_weights=np.full(n_particles, -np.log(n_particles)),
         metadata={
             "temperature": 0.0,
             "n_pulses": 1,
@@ -270,7 +274,7 @@ def main():
         },
     )
 
-    static_context = {
+    shared_context = {
         "data_x": xdata,
         "data_y": ydata,
         "sigma": sigma,
@@ -287,7 +291,7 @@ def main():
         StepContext(
             t=0,
             observation=None,
-            static=static_context,
+            shared=shared_context,
         ),
     )
 
@@ -301,7 +305,7 @@ def main():
         StepContext(
             t=0,
             observation=None,
-            static=static_context,
+            shared=shared_context,
         ),
     )
     print("True log likelihood:", true_log_likelihood)
@@ -309,7 +313,7 @@ def main():
     if not np.all(np.isfinite(initial_log_priors)):
         raise ValueError("Some initial particles have zero prior density.")
 
-    result = smc.run(initial_state, rng=rng, static_context=static_context)
+    result = smc.run(initial_state, rng=rng, shared_context=shared_context)
 
     print("Run summary:")
     for key, value in result.summary().items():
@@ -338,12 +342,12 @@ def main():
     result.plot_metadata_history("temperature", ax=axes[0])
     result.plot_metadata_history("n_pulses", ax=axes[1])
     fig.tight_layout()
-    fig.savefig("temperature_schedule.png")
+    fig.savefig(outdir / "temperature_schedule.png")
 
     # Plot the evidence
     fig = plt.figure()
     result.plot_log_evidence(ax=plt.gca())
-    fig.savefig("evidence.png")
+    fig.savefig(outdir / "evidence.png")
 
     # Use posterior samples from preferred number of pulses
     state = result[idx_per_n_pulses[preferred_n_pulses]]
@@ -352,7 +356,7 @@ def main():
     context = StepContext(
         t=len(result) - 1,
         observation=None,
-        static=static_context,
+        shared=shared_context,
     )
 
     log_likelihoods = log_likelihood(posterior_samples, context)
@@ -387,24 +391,31 @@ def main():
         plt.plot(xdata, signal, c="red", alpha=0.1, ls="--")
     plt.legend()
     plt.title("Posterior Predictive")
-    fig.savefig("fit.png")
+    fig.savefig(outdir / "fit.png")
 
-    labels = []
-    for i in range(preferred_n_pulses):
-        labels.append(f"A_{i + 1}")
-        labels.append(f"mu_{i + 1}")
-        labels.append(f"sigma_{i + 1}")
-    fig = corner.corner(
-        posterior_samples,
-        labels=labels,
-        show_titles=True,
-        title_fmt=".2f",
-        quantiles=[0.16, 0.5, 0.84],
-        smooth=0.9,
-        color="C0",
-        density=True,
-    )
-    fig.savefig("posterior_corner.png")
+    # Plot all parameters on the same 3D corner plot
+    fig = None
+    # Corner range, each entry is (min, max)
+    corner_range = bounds.T
+    # Colors set based on order of components
+    # Use dark blue to light blue
+    color_map = plt.get_cmap("Blues_r")
+    # Reverse order so first component is on top
+    for component_id in reversed(range(preferred_n_pulses)):
+        component_particles = particles_reshaped[:, :, component_id]
+        fig = corner.corner(
+            component_particles,
+            fig=fig,
+            color=color_map(component_id / preferred_n_pulses),
+            bins=30,
+            plot_datapoints=False,
+            plot_density=False,
+            plot_contours=True,
+            smooth=1.6,
+            range=corner_range,
+            labels=["Amplitude", "Mean", "Scale"],
+        )
+    fig.savefig(outdir / "posterior_corner.png")
 
 
 if __name__ == "__main__":
