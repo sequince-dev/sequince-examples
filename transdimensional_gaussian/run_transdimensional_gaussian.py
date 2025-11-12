@@ -21,7 +21,7 @@ def log_likelihood(particles, context):
     diffs = particles
     log_norm = -0.5 * particles.shape[1] * np.log(2 * np.pi)
     log_likes = -0.5 * np.sum(diffs**2, axis=-1)
-    return log_likes - log_norm
+    return log_likes + log_norm
 
 
 def log_prior(particles, context):
@@ -48,15 +48,11 @@ def component_sampler(state, context, rng):
 class TemperatureTriggeredExpansion(DimensionalityExpansion):
     def __init__(
         self,
-        log_likelihood: Callable[[np.ndarray], np.ndarray],
-        log_prior: Callable[[np.ndarray], np.ndarray],
         target_dims: int,
         trigger_temperature: float = 0.999,
     ):
         super().__init__(
             component_sampler=component_sampler,
-            log_likelihood=log_likelihood,
-            log_prior=log_prior,
             expected_block_size=1,
             metadata_key="dimensions",
             context_key="dimensions",
@@ -151,8 +147,6 @@ def main():
                 )
             ),
             TemperatureTriggeredExpansion(
-                log_likelihood=log_likelihood,
-                log_prior=log_prior,
                 target_dims=target_dims,
                 trigger_temperature=trigger_temperature,
             ),
