@@ -16,6 +16,15 @@ from sequince.steps.base import StepContext
 from sequince.transforms import AffineTransform
 
 
+def log_likelihood_difference(particles, context):
+    if context.shared["n_dims"] == context.shared["n_dims_start"]:
+        return log_likelihood(particles, context)
+    else:
+        return log_likelihood(particles, context) - log_likelihood(
+            particles[:, :-1], context
+        )
+
+
 def log_likelihood(particles, context):
     """Gaussian likelihood with zero mean and identity covariance."""
     diffs = particles
@@ -113,11 +122,16 @@ def main():
     initial_dims = 1
     target_dims = 4
 
-    lower_bound = -10.0
-    upper_bound = 10.0
+    lower_bound = -np.exp(3) / 2
+    upper_bound = np.exp(3) / 2
 
-    n_particles = 5_000
+    n_particles = 1_000
     trigger_temperature = 1 - 1e-6
+
+    tempered_posterior_difference = TemperedPosterior(
+        log_likelihood=log_likelihood_difference,
+        log_prior=log_prior,
+    )
 
     tempered_posterior = TemperedPosterior(
         log_likelihood=log_likelihood,
@@ -127,15 +141,15 @@ def main():
     smc = SequentialMonteCarlo(
         steps=[
             AdaptiveTemperedWeighting(
-                tempered_posterior,
-                target_ess_ratio=0.95,
+                tempered_posterior_difference,
+                target_ess_ratio=0.9,
                 max_temperature=1.0,
                 min_delta=1e-8,
             ),
             SystematicResampling(always_resample=True),
             MiniPCNMutation(
                 tempered_posterior,
-                n_steps=50,
+                n_steps=100,
                 step_fn="tpcn",
                 transform=AffineTransform(),
             ),
@@ -171,8 +185,9 @@ def main():
     shared_context = {
         "lower_bound": lower_bound,
         "upper_bound": upper_bound,
-        "n_dims": 1,
-        "dimensions": 1,
+        "n_dims": initial_dims,
+        "n_dims_start": initial_dims,
+        "dimensions": 3,
         "temperature": 0.0,
     }
 
@@ -180,10 +195,11 @@ def main():
 
     print("Run summary:")
     for key, value in result.summary().items():
-        print(f"  {key}: {value}")
+        if key != "final_temperature":
+            print(f"{key}: {value}")
 
     true_log_evidence = -np.log(upper_bound - lower_bound) * target_dims
-    print(f"True log evidence: {true_log_evidence:.2f}")
+    print(f"True log evidence: {true_log_evidence:.5f}")
 
     result.plot_corner(filename="transdimensional_gaussian_corner.png")
 
