@@ -7,6 +7,7 @@ import numpy as np
 import corner
 
 from sequince import ParticleState, SequentialMonteCarlo
+from sequince._typing import Array
 from sequince.logging_utils import configure_logging
 from sequince.posterior import TemperedPosterior
 from sequince.steps import (
@@ -23,7 +24,9 @@ from sequince.result import NestedSMCResult
 from sequince.steps.base import StepContext
 from sequince.transforms import AffineTransform
 
-from hypertriangle import hypertriangulate
+from hypertriangle import hypertriangulate, hypercubify
+
+from scipy.special import factorial
 
 def component_view(particles, context):
     """View particles as (3, n_pulses, n_particles) array."""
@@ -84,26 +87,39 @@ def log_prior(particles, context):
     return log_prior
 
 
-def component_sampler(state, context, rng):
-    """Sample new components from the prior."""
-    new_components = rng.uniform(
-        context.shared["bounds"][0],
-        context.shared["bounds"][1],
-        size=(state.particles.shape[0], context.shared["dims_per_pulse"])
-    )
-    return new_components
-
-
 class PulseAdditionTransformation(SMCTransformation):
     def forward(self, state, context, rng):
-        new_block = component_sampler(state, context, rng) # (n_particles, 3)
-        particles = np.asarray(state.particles)
-        expanded_particles = np.concatenate([particles, new_block], axis=1) # (n_particles, old_dim + 3)
-        return state.with_updates(particles=expanded_particles)
+
+        new_dims_component_space = rng.uniform(
+            context.shared["bounds"][0],
+            context.shared["bounds"][1],
+            size=(state.particles.shape[0], context.shared["dims_per_pulse"])
+        ).T[:,None,:]
+
+        particles_reshape = component_view(state.particles, context) # (3, n_pulses, n_particles)
+
+        unsorted_particles_component_space = np.concatenate([particles_reshape, new_dims_component_space], axis=1) # (3, n_pulses + 1, n_particles)
+        # sort by mean
+        sorted_indices = np.argsort(unsorted_particles_component_space[1], axis=0) # (n_particles, n_pulses + 1)
+        sorted_particles_component_space = np.take_along_axis(unsorted_particles_component_space, sorted_indices[None, :, :], axis=1) # (3, n_pulses + 1, n_particles)
+
+        particles_hypercube = sorted_particles_component_space.copy()
+        particles_hypercube[1] = hypercubify(particles_hypercube[1].T, bounds=context.shared["bounds"][:,1]).T
+        
+        particles_out = particles_hypercube.T.reshape((state.particles.shape[0], -1))
+        return state.with_updates(particles=particles_out)
 
     def inverse(self, particles, context):
-        return particles[:, :-3]
+        particles_hypertriangle = component_view(particles, context)
+        particles_hypertriangle[1] = hypertriangulate(particles_hypertriangle[1].T, bounds=context.shared["bounds"][:,1]).T
+        
+        particles_hypertriangle_trimmed = particles_hypertriangle[:,:-1]
+        particles_hypercube_trimmed = particles_hypertriangle_trimmed.copy()
+        particles_hypercube_trimmed[1] = hypercubify(particles_hypercube_trimmed[1].T, bounds=context.shared["bounds"][:,1]).T
+        particles_out = particles_hypercube_trimmed.T.reshape((particles.shape[0], -1))
 
+        return particles_out
+    
     def log_auxiliary_density(self, particles, context):
         new_block = particles[:, -3:]
         in_bounds = bounds_check(new_block.T[:, None, :], context)
@@ -115,6 +131,8 @@ class PulseAdditionTransformation(SMCTransformation):
         log_q[in_bounds] = log_norm_constant
         return log_q
 
+    def log_jacobian(self, particles, context):
+        return np.full(particles.shape[0], np.log(factorial(context.metadata["n_dims"] // context.shared["dims_per_pulse"])), dtype=float)
 
 def stop_predicate(state, context):
     return context.metadata['n_dims'] // context.shared['dims_per_pulse'] >= context.shared['target_pulses']
@@ -155,7 +173,7 @@ def main():
     n_pulses = 2
     n_pulses_start = 1
     target_n_pulses = 2
-    n_particles = 5_000
+    n_particles = 10_000
 
     outdir = pathlib.Path("outdir") / f"{n_pulses}_pulses"
     outdir.mkdir(parents=True, exist_ok=True)
@@ -201,14 +219,14 @@ def main():
         steps=[
             AdaptiveTemperedWeighting(
                 tempered_posterior,
-                target_ess_ratio=0.9,
+                target_ess_ratio=0.8,
                 max_temperature=1.0,
                 min_delta=1e-8,
             ),
             SystematicResampling(always_resample=True),
             MiniPCNMutation(
                 tempered_posterior,
-                n_steps=20,
+                n_steps=50,
                 step_fn="tpcn",
                 transform=AffineTransform(),
             ),
@@ -237,7 +255,7 @@ def main():
     )
 
     particles = np.zeros((n_particles, dims_per_pulse * n_pulses_start))
-    for i in range(n_pulses):
+    for i in range(n_pulses_start):
         particles[:, i*dims_per_pulse:(i+1)*dims_per_pulse] = rng.uniform(
             low=bounds[0],
             high=bounds[1],
