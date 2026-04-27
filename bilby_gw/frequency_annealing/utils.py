@@ -1,14 +1,15 @@
 import logging
 import multiprocessing as mp
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from itertools import repeat
 from pathlib import Path
-from typing import Dict, Iterable, Sequence
+from typing import Any, Dict, Iterable, Sequence
 
 import bilby
 import corner
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 from orng import ArrayRNG
 from sequince.logging_utils import configure_logging
 from sequince.posterior import TemperedPosterior
@@ -77,6 +78,58 @@ class FrequencyAnnealingLikelihood(bilby.gw.GravitationalWaveTransient):
         self.maximum_frequency = frequency
         for ifo in self.interferometers:
             ifo.maximum_frequency = frequency
+
+
+def _coerce_logging_level(value: int | str) -> int:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        level = getattr(logging, value.upper(), None)
+        if isinstance(level, int):
+            return level
+    raise ValueError(f"Invalid logging level: {value!r}")
+
+
+def load_yaml_config(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as file_pointer:
+        loaded = yaml.safe_load(file_pointer) or {}
+    if not isinstance(loaded, dict):
+        raise ValueError("Config file must contain a top-level mapping.")
+    return loaded
+
+
+def resolve_frequency_annealing_config(
+    config_path: Path,
+) -> FrequencyAnnealingConfig:
+    raw_config = load_yaml_config(config_path)
+    config = FrequencyAnnealingConfig()
+    overrides = dict(raw_config)
+
+    if "outdir" in overrides:
+        overrides["outdir"] = Path(overrides["outdir"])
+    if "bilby_analysis_outdir" in overrides:
+        overrides["bilby_analysis_outdir"] = Path(
+            overrides["bilby_analysis_outdir"]
+        )
+    if "logging_level" in overrides:
+        overrides["logging_level"] = _coerce_logging_level(
+            overrides["logging_level"]
+        )
+
+    return FrequencyAnnealingConfig(**(asdict(config) | overrides))
+
+
+def save_frequency_annealing_config(
+    cfg: FrequencyAnnealingConfig,
+    output_path: Path,
+) -> None:
+    config_dict = asdict(cfg)
+    config_dict["outdir"] = str(cfg.outdir)
+    config_dict["bilby_analysis_outdir"] = str(cfg.bilby_analysis_outdir)
+    config_dict["fixed_keys"] = list(cfg.fixed_keys)
+    config_dict["logging_level"] = logging.getLevelName(cfg.logging_level)
+    with output_path.open("w", encoding="utf-8") as file_pointer:
+        yaml.safe_dump(config_dict, file_pointer, sort_keys=True)
 
 
 def configure_example_logging(cfg: FrequencyAnnealingConfig) -> None:

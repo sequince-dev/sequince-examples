@@ -8,6 +8,7 @@ the maximum frequency of the likelihood integration.
 
 from __future__ import annotations
 
+import argparse
 import logging
 import multiprocessing as mp
 import os
@@ -33,8 +34,10 @@ from utils import (
     plot_intermediate_corners,
     plot_metadata_history,
     plot_posterior_corner,
+    resolve_frequency_annealing_config,
     run_bilby_analysis,
     run_smc,
+    save_frequency_annealing_config,
 )
 
 logger = logging.getLogger("sequince")
@@ -46,6 +49,7 @@ os.environ["MKL_NUM_THREADS"] = str(1)
 
 def run_frequency_annealing(cfg: FrequencyAnnealingConfig) -> None:
     configure_example_logging(cfg)
+    save_frequency_annealing_config(cfg, cfg.outdir / "config.yaml")
     injection_parameters = build_injection_parameters(cfg)
     waveform_generator = build_waveform_generator(cfg)
     ifos = build_interferometers(cfg, injection_parameters, waveform_generator)
@@ -166,30 +170,23 @@ def run_frequency_annealing(cfg: FrequencyAnnealingConfig) -> None:
     logger.info("Finished run. Results stored in %s", cfg.outdir.resolve())
 
 
-def main():
-    run_frequency_annealing(
-        FrequencyAnnealingConfig(
-            aligned_spins=True,
-            outdir=Path("frequency_annealing_metasmc"),
-            n_pool_processes=8,
-            n_frequency_steps=4,
-            ess_ratio=0.8,
-            n_particles=500,
-            mutation_steps=20,
-            run_bilby_analysis=True,
-            bilby_sampler_kwargs=dict(
-                nlive=500,
-                sampler="nessai",
-            ),
-            fixed_keys=[
-                "ra",
-                "dec",
-                "psi",
-                "theta_jn",
-                "geocent_time",
-            ],
-        )
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run the frequency annealing example from a YAML config."
     )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path(__file__).with_name("config.yaml"),
+        help="Path to the YAML configuration file.",
+    )
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    cfg = resolve_frequency_annealing_config(args.config)
+    run_frequency_annealing(cfg)
 
 
 if __name__ == "__main__":
