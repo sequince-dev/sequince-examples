@@ -51,7 +51,6 @@ def _log_likelihood_no_sum(xdata, ydata, sigma, particles):
         + log_norm
     )
 
-
 def log_likelihood(particles, context, sum_over_pulses=True):
     """
     Log likelihood of Gaussian pulse model with Gaussian noise.
@@ -105,71 +104,6 @@ def component_sampler(state, context, rng):
         size=(state.particles.shape[0], context.shared["dims_per_pulse"])
     )
     return new_components
-
-
-class PulseTemperedPosterior(TemperedPosterior):
-    def log_increment(
-        self,
-        particles,
-        context,
-        *,
-        log_proposal_override=None,
-    ):
-        if log_proposal_override is None:
-            return super().log_increment(
-                particles,
-                context,
-                log_proposal_override=log_proposal_override,
-            )
-
-        
-        components = component_view(particles, context)
-        # components[1] = hypertriangulate(components[1].T, bounds=context.shared["bounds"][:,1]).T
-        last_pulse = components[:, -1][:, None, :]
-        
-        xdata = context.shared["data_x"]
-        ydata = context.shared["data_y"]
-        sigma = context.shared["sigma"]
-        increments = _log_likelihood(xdata, ydata, sigma, last_pulse)
-
-        if particles.ndim == 1:
-            return np.array(increments[0], ndmin=1)
-        return increments
-
-    def log_prob(
-        self,
-        particles,
-        context,
-        *,
-        log_proposal_override=None,
-    ):
-        if log_proposal_override is None:
-            return super().log_prob(
-                particles,
-                context,
-                log_proposal_override=log_proposal_override,
-            )
-
-        n_dims = int(context.metadata["n_dims"])
-        beta = float(context.metadata.get("temperature", 0.0))
-
-        log_prior_vals = log_prior(particles, context)
-        
-        if n_dims <= 0:
-            result = log_prior_vals
-        else:
-            partial_logls = log_likelihood(particles, context, sum_over_pulses=False)
-            if n_dims == context.shared["dims_per_pulse"]:
-                previous_log_like = np.zeros(particles.shape[0], dtype=float)
-            else:
-                previous_log_like = partial_logls[:-1].sum(0)
-
-            new_log_like = partial_logls[-1]
-            result = log_prior_vals + previous_log_like + beta * new_log_like
-
-        if particles.ndim == 1:
-            return float(result[0])
-        return result
 
 
 class PulseAdditionTransformation(SMCTransformation):
@@ -261,7 +195,7 @@ def main():
     plt.savefig(outdir / "data.png")
     plt.close()
 
-    tempered_posterior = PulseTemperedPosterior(
+    tempered_posterior = TemperedPosterior(
         log_likelihood=log_likelihood,
         log_prior=log_prior,
     )
