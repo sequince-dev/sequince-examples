@@ -43,15 +43,7 @@ def _log_likelihood(xdata, ydata, sigma, particles):
     )
     return logl
 
-def _log_likelihood_no_sum(xdata, ydata, sigma, particles):
-    templates = gauss(xdata[:, None, None], *particles)
-    log_norm = -0.5 * ydata.shape[0] * np.log(2 * np.pi * sigma**2)
-    return (
-        -0.5 * ((ydata[:, None, None] - templates) ** 2).sum(0) / (sigma**2)
-        + log_norm
-    )
-
-def log_likelihood(particles, context, sum_over_pulses=True):
+def log_likelihood(particles, context):
     """
     Log likelihood of Gaussian pulse model with Gaussian noise.
     """
@@ -61,12 +53,8 @@ def log_likelihood(particles, context, sum_over_pulses=True):
     particles = component_view(particles, context).copy()
 
     # apply hypertriangle map
-    # particles[1] = hypertriangulate(particles[1].T, bounds=context.shared["bounds"][:,1]).T
-
-    if sum_over_pulses:
-        return _log_likelihood(xdata, ydata, sigma, particles)
-    else:
-        return _log_likelihood_no_sum(xdata, ydata, sigma, particles)
+    particles[1] = hypertriangulate(particles[1].T, bounds=context.shared["bounds"][:,1]).T
+    return _log_likelihood(xdata, ydata, sigma, particles)
 
 
 def bounds_check(particles_component_view, context):
@@ -120,14 +108,10 @@ class PulseAdditionTransformation(SMCTransformation):
         new_block = particles[:, -3:]
         in_bounds = bounds_check(new_block.T[:, None, :], context)
         log_q = np.full(new_block.shape[0], -np.inf, dtype=float)
-
         bounds = context.shared["bounds"]
-
         log_norm_constant = (
             -np.log(bounds[1] - bounds[0])
         ).sum(0)
-
-
         log_q[in_bounds] = log_norm_constant
         return log_q
 
@@ -252,13 +236,17 @@ def main():
         ]
     )
 
-    # Initial state with draws from the prior
-    initial_state = ParticleState(
-        particles=rng.uniform(
+    particles = np.zeros((n_particles, dims_per_pulse * n_pulses_start))
+    for i in range(n_pulses):
+        particles[:, i*dims_per_pulse:(i+1)*dims_per_pulse] = rng.uniform(
             low=bounds[0],
             high=bounds[1],
             size=(n_particles, dims_per_pulse),
-        ),
+        )
+
+    # Initial state with draws from the prior
+    initial_state = ParticleState(
+        particles=particles,
         log_weights=np.full(n_particles, -np.log(n_particles)),
     )
 
@@ -277,7 +265,7 @@ def main():
 
     nested_result.results[0].plot_corner(labels=["A1", "mu1", "sigma1"], filename=outdir / "posterior_1.png")
     nested_result.results[1].plot_corner(labels=["A1", "mu1", "sigma1", "A2", "mu2", "sigma2"], filename=outdir / "posterior_2.png")
-    # nested_result.results[2].plot_corner(labels=["A1", "mu1", "sigma1", "A2", "mu2", "sigma2", "A3", "mu3", "sigma3"], filename=outdir / "posterior_3.png")
+    # nested_result.results[0].plot_corner(labels=["A1", "mu1", "sigma1", "A2", "mu2", "sigma2"], filename=outdir / "posterior_2.png")
 
     nested_result.plot_log_evidence()
     plt.savefig(outdir / "evidence_history.png")
