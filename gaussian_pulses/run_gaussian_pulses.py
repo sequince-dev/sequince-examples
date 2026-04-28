@@ -1,41 +1,126 @@
+import math
 import pathlib
-from typing import Callable
-from unittest import signals
-import matplotlib.pyplot as plt
-import numpy as np
 
 import corner
-
+import matplotlib.pyplot as plt
+import numpy as np
+from hypertriangle import hypercubify, hypertriangulate
 from sequince import ParticleState, SequentialMonteCarlo
-from sequince._typing import Array
 from sequince.logging_utils import configure_logging
 from sequince.posterior import TemperedPosterior
+from sequince.result import NestedSMCResult
 from sequince.steps import (
     AdaptiveTemperedWeighting,
+    ExpandDimensions,
     LoggingStep,
     MiniPCNMutation,
-    SystematicResampling,
     NestedSMCStep,
     SMCTransformation,
-    ExpandDimensions
+    SystematicResampling,
 )
-from sequince.steps.control import StopIf
-from sequince.result import NestedSMCResult
 from sequince.steps.base import StepContext
+from sequince.steps.control import StopIf
 from sequince.transforms import AffineTransform
 
-from hypertriangle import hypertriangulate, hypercubify
-
-from scipy.special import factorial
 
 def component_view(particles, context):
     """View particles as (3, n_pulses, n_particles) array."""
-    n_pulses = context.metadata["n_dims"] // context.shared["dims_per_pulse"]
-    return particles.reshape((particles.shape[0], n_pulses, context.shared["dims_per_pulse"])).T
+    n_pulses = particles.shape[1] // context.shared["dims_per_pulse"]
+    return particles.reshape(
+        (particles.shape[0], n_pulses, context.shared["dims_per_pulse"])
+    ).T
+
+
+def physical_component_view(particles, context):
+    """Return pulse parameters with ordered physical means."""
+    pulses = component_view(particles, context).copy()
+    pulses[1] = hypertriangulate(
+        pulses[1].T,
+        bounds=context.shared["bounds"][:, 1],
+    ).T
+    return pulses
+
+
+def physical_component_view_for_dims(particles, n_dims, shared_context):
+    """Return pulse parameters with ordered physical means for a fixed dimension."""
+    n_pulses = n_dims // shared_context["dims_per_pulse"]
+    pulses = particles.reshape(
+        (particles.shape[0], n_pulses, shared_context["dims_per_pulse"])
+    ).T.copy()
+    pulses[1] = hypertriangulate(
+        pulses[1].T,
+        bounds=shared_context["bounds"][:, 1],
+    ).T
+    return pulses
+
+
+def flatten_physical_particles(particles, n_dims, shared_context):
+    """Return particles flattened back to (n_particles, n_dims) in physical coordinates."""
+    pulses = physical_component_view_for_dims(
+        particles, n_dims, shared_context
+    )
+    return pulses.T.reshape(particles.shape[0], n_dims)
+
+
+def sort_true_parameters_by_mean(
+    true_parameters: tuple[np.ndarray, np.ndarray, np.ndarray],
+):
+    """Match truth ordering to the ordered-mean parameterization used in plots."""
+    amplitudes, means, sigmas = true_parameters
+    order = np.argsort(means)
+    return amplitudes[order], means[order], sigmas[order]
+
+
+def plot_physical_corner(
+    result,
+    *,
+    shared_context,
+    filename: pathlib.Path,
+    labels: list[str],
+    truths: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
+):
+    """Corner plot in physical coordinates rather than stored hypercube coordinates."""
+    state = result.final_state
+    n_dims = int(state.metadata.get("n_dims", state.particles.shape[1]))
+    physical_particles = flatten_physical_particles(
+        np.asarray(state.particles),
+        n_dims,
+        shared_context,
+    )
+
+    corner_kwargs = dict(
+        bins=32,
+        smooth=0.9,
+        color="#EFBF35",
+        truth_color="#6B8E23",
+        quantiles=[0.16, 0.5, 0.84],
+        levels=(1 - np.exp(-0.5), 1 - np.exp(-2), 1 - np.exp(-9 / 2.0)),
+        plot_density=True,
+        plot_datapoints=True,
+        fill_contours=True,
+        show_titles=True,
+        hist_kwargs=dict(density=True, linewidth=2),
+        weights=state.weights,
+        labels=labels,
+    )
+
+    if truths is not None:
+        amplitudes, means, sigmas = truths
+        n_pulses = n_dims // shared_context["dims_per_pulse"]
+        truths_flat = np.column_stack(
+            [amplitudes[:n_pulses], means[:n_pulses], sigmas[:n_pulses]]
+        ).reshape(-1)
+        corner_kwargs["truths"] = truths_flat
+
+    fig = corner.corner(physical_particles, **corner_kwargs)
+    fig.savefig(filename)
+    plt.close(fig)
+
 
 def gauss(x, A, mu, sigma):
     """Single Gaussian pulse model."""
     return A * np.exp(-0.5 * ((x - mu) / sigma) ** 2)
+
 
 def _log_likelihood(xdata, ydata, sigma, particles):
     templates = gauss(xdata[:, None, None], *particles)
@@ -46,6 +131,7 @@ def _log_likelihood(xdata, ydata, sigma, particles):
     )
     return logl
 
+
 def log_likelihood(particles, context):
     """
     Log likelihood of Gaussian pulse model with Gaussian noise.
@@ -53,21 +139,21 @@ def log_likelihood(particles, context):
     xdata = context.shared["data_x"]
     ydata = context.shared["data_y"]
     sigma = context.shared["sigma"]
-    particles = component_view(particles, context).copy()
-
-    # apply hypertriangle map
-    particles[1] = hypertriangulate(particles[1].T, bounds=context.shared["bounds"][:,1]).T
+    particles = physical_component_view(particles, context)
     return _log_likelihood(xdata, ydata, sigma, particles)
-
 
 def bounds_check(particles_component_view, context):
     bounds = context.shared["bounds"]
-    in_bounds = np.all(np.all((
-        particles_component_view >= bounds[0,:,None,None]
-    ) & (
-        particles_component_view <= bounds[1,:,None,None]
-    ), axis=0), axis=0)
+    in_bounds = np.all(
+        np.all(
+            (particles_component_view >= bounds[0, :, None, None])
+            & (particles_component_view <= bounds[1, :, None, None]),
+            axis=0,
+        ),
+        axis=0,
+    )
     return in_bounds
+
 
 def log_prior(particles, context):
     """
@@ -76,9 +162,8 @@ def log_prior(particles, context):
     bounds = context.shared["bounds"]
     n_pulses = context.metadata["n_dims"] // context.shared["dims_per_pulse"]
 
-    log_norm_constant = (
-        -np.log(bounds[1] - bounds[0]) * n_pulses
-    ).sum(0)
+    log_norm_constant = (-np.log(bounds[1] - bounds[0]) * n_pulses).sum(0)
+    log_norm_constant += math.lgamma(n_pulses + 1)
 
     log_prior = np.full(particles.shape[0], log_norm_constant)
     particles = component_view(particles, context)
@@ -89,53 +174,177 @@ def log_prior(particles, context):
 
 class PulseAdditionTransformation(SMCTransformation):
     def forward(self, state, context, rng):
+        particles = np.asarray(state.particles)
+        n_particles = particles.shape[0]
+        bounds = context.shared["bounds"]
 
-        new_dims_component_space = rng.uniform(
-            context.shared["bounds"][0],
-            context.shared["bounds"][1],
-            size=(state.particles.shape[0], context.shared["dims_per_pulse"])
-        ).T[:,None,:]
-
-        particles_reshape = component_view(state.particles, context) # (3, n_pulses, n_particles)
-
-        unsorted_particles_component_space = np.concatenate([particles_reshape, new_dims_component_space], axis=1) # (3, n_pulses + 1, n_particles)
-        # sort by mean
-        sorted_indices = np.argsort(unsorted_particles_component_space[1], axis=0) # (n_particles, n_pulses + 1)
-        sorted_particles_component_space = np.take_along_axis(unsorted_particles_component_space, sorted_indices[None, :, :], axis=1) # (3, n_pulses + 1, n_particles)
-
-        particles_hypercube = sorted_particles_component_space.copy()
-        particles_hypercube[1] = hypercubify(particles_hypercube[1].T, bounds=context.shared["bounds"][:,1]).T
+        # draw new pulse (physical parameters)
+        new_pulse = rng.uniform(
+            bounds[0],
+            bounds[1],
+            (n_particles, context.shared["dims_per_pulse"]),
+        )
         
-        particles_out = particles_hypercube.T.reshape((state.particles.shape[0], -1))
-        return state.with_updates(particles=particles_out)
+        # Transform to physical parameters to add new pulse
+        pulses = physical_component_view(particles, context).copy()
+
+        # Append new pulse to existing pulses in physical coordinates
+        new_pulses = np.concatenate((pulses, new_pulse.T[:, None, :]), axis=1)
+
+        # sort pulses by their means to enforce identifiability
+        sorted_indices = np.argsort(new_pulses[1], axis=0)
+
+        # keep track of the added pulse
+        added_pulse_indices = np.where(sorted_indices == pulses.shape[1])[0]
+
+        context.metadata["added_pulse_indices"] = added_pulse_indices
+
+        sorted_pulses = np.take_along_axis(
+            new_pulses, sorted_indices[None, :, :], axis=1
+        )
+        
+        # Map the sorted means back to hypercube coordinates
+        sorted_pulses[1] = hypercubify(
+            sorted_pulses[1].T,
+            bounds=context.shared["bounds"][:, 1],
+        ).T
+
+        expanded_particles = sorted_pulses.T.reshape(
+            n_particles,
+            particles.shape[1] + context.shared["dims_per_pulse"],
+        )
+
+        return state.with_updates(particles=expanded_particles)
 
     def inverse(self, particles, context):
-        particles_hypertriangle = component_view(particles, context)
-        particles_hypertriangle[1] = hypertriangulate(particles_hypertriangle[1].T, bounds=context.shared["bounds"][:,1]).T
-        
-        particles_hypertriangle_trimmed = particles_hypertriangle[:,:-1]
-        particles_hypercube_trimmed = particles_hypertriangle_trimmed.copy()
-        particles_hypercube_trimmed[1] = hypercubify(particles_hypercube_trimmed[1].T, bounds=context.shared["bounds"][:,1]).T
-        particles_out = particles_hypercube_trimmed.T.reshape((particles.shape[0], -1))
+        # Map to physical space
+        pulses = physical_component_view(particles, context).copy()
 
-        return particles_out
-    
+        remove = context.metadata["added_pulse_indices"]
+
+        all_pulses = np.arange(pulses.shape[1])
+        row_idx = np.where(
+            all_pulses[:, None] < remove[None, :],
+            all_pulses[:, None],
+            all_pulses[:, None] + 1
+        )[:pulses.shape[1]-1]                       
+
+        col_idx = np.arange(pulses.shape[2])[None, :]
+        reduced_pulses = pulses[:, row_idx, col_idx].T.reshape(
+            particles.shape[0],
+            particles.shape[1] - context.shared["dims_per_pulse"],
+        )
+        
+        # Map back to hypercube coordinates
+        reduced_pulses[1] = hypercubify(
+            reduced_pulses[1].T,
+            bounds=context.shared["bounds"][:, 1],
+        ).T
+
+        return reduced_pulses.T.reshape(particles.shape[0], particles.shape[1] - context.shared["dims_per_pulse"])
+
     def log_auxiliary_density(self, particles, context):
-        new_block = particles[:, -3:]
-        in_bounds = bounds_check(new_block.T[:, None, :], context)
-        log_q = np.full(new_block.shape[0], -np.inf, dtype=float)
+        in_bounds = bounds_check(component_view(particles, context), context)
+        log_q = np.full(particles.shape[0], -np.inf, dtype=float)
         bounds = context.shared["bounds"]
-        log_norm_constant = (
-            -np.log(bounds[1] - bounds[0])
-        ).sum(0)
-        log_q[in_bounds] = log_norm_constant
+        log_q[in_bounds] =  (-np.log(bounds[1] - bounds[0])).sum(0)
         return log_q
 
     def log_jacobian(self, particles, context):
-        return np.full(particles.shape[0], np.log(factorial(context.metadata["n_dims"] // context.shared["dims_per_pulse"])), dtype=float)
+        # The hypertriangle reparameterization contributes a constant birth-move
+        # Jacobian of k + 1 when going from k ordered means to k + 1.
+        n_pulses = (
+            context.metadata["n_dims"] // context.shared["dims_per_pulse"]
+        )
+        return np.full(particles.shape[0], np.log(n_pulses), dtype=float)
 
-def stop_predicate(state, context):
-    return context.metadata['n_dims'] // context.shared['dims_per_pulse'] >= context.shared['target_pulses']
+
+def make_inner_parameter_plot_callback(
+    outdir: pathlib.Path,
+    true_parameters: tuple[np.ndarray, np.ndarray, np.ndarray],
+):
+    def _callback(state: ParticleState, context: StepContext, result) -> None:
+        inner_results = result.context.outputs.get("inner_results")
+        if not inner_results:
+            return
+
+        nested_result = NestedSMCResult(inner_results)
+        fig, axes = plt.subplots(3, 1, figsize=(10, 9), sharex=True)
+        colors = plt.cm.tab10.colors
+        labels = ["Amplitude", "Mean", "Sigma"]
+        true_amplitudes, true_means, true_sigmas = true_parameters
+        true_series = [true_amplitudes, true_means, true_sigmas]
+
+        iteration_offset = 0
+        for nested in nested_result.results:
+            for local_index, inner_state in enumerate(nested.states):
+                n_dims = int(
+                    inner_state.metadata.get(
+                        "n_dims", inner_state.particles.shape[1]
+                    )
+                )
+                pulses = physical_component_view_for_dims(
+                    np.asarray(inner_state.particles),
+                    n_dims,
+                    context.shared,
+                )
+                weights = np.asarray(inner_state.weights)
+                weighted_means = np.sum(
+                    pulses * weights[None, None, :],
+                    axis=2,
+                )
+                x = iteration_offset + local_index
+                for component_index in range(weighted_means.shape[1]):
+                    color = colors[component_index % len(colors)]
+                    for param_index, axis in enumerate(axes):
+                        axis.scatter(
+                            x,
+                            weighted_means[param_index, component_index],
+                            color=color,
+                            s=18,
+                        )
+            iteration_offset += len(nested.states)
+
+        max_components = max(
+            res.final_state.particles.shape[1]
+            // context.shared["dims_per_pulse"]
+            for res in nested_result.results
+        )
+        for component_index in range(max_components):
+            color = colors[component_index % len(colors)]
+            axes[0].plot(
+                [], [], color=color, label=f"Pulse {component_index + 1}"
+            )
+
+        for param_index, axis in enumerate(axes):
+            truths = true_series[param_index]
+            for component_index, true_value in enumerate(truths):
+                color = colors[component_index % len(colors)]
+                axis.axhline(
+                    true_value,
+                    color=color,
+                    linestyle="--",
+                    alpha=0.6,
+                )
+
+        for axis, label in zip(axes, labels):
+            axis.set_ylabel(label)
+            axis.grid(alpha=0.25)
+        axes[0].legend(loc="best")
+        axes[-1].set_xlabel("Inner iteration")
+        fig.tight_layout()
+        fig.savefig(outdir / "inner_parameter_trajectories.png")
+        plt.close(fig)
+
+    return _callback
+
+
+def stop_predicate(state: ParticleState, context: StepContext) -> bool:
+    return (
+        context.metadata["n_dims"] // context.shared["dims_per_pulse"]
+        >= context.shared["target_pulses"]
+    )
+
 
 def logging_str_fn(state: ParticleState, context: StepContext) -> str:
     n_pulses = context.metadata["n_dims"] // context.shared["dims_per_pulse"]
@@ -146,13 +355,14 @@ def logging_str_fn(state: ParticleState, context: StepContext) -> str:
         f"Log Evidence: {log_evidence:.1f}"
     )
 
+
 def sub_logging_str_fn(state: ParticleState, context: StepContext) -> str:
     temperature = context.metadata["temperature"]
     log_evidence = state.log_evidence
     return (
         f"sub-it {context.t}:, "
-        f"Temperature: {temperature:.4f}, "
-        f"Log Evidence: {log_evidence:.1f}"
+        f"Temperature: {temperature:.3e}, "
+        f"Log Evidence: {log_evidence:.2e}"
     )
 
 
@@ -181,6 +391,9 @@ def main():
     A_true, mu_true, sigma_true = rng.uniform(
         bounds[0], bounds[1], (n_pulses, 3)
     ).T
+    true_parameters = sort_true_parameters_by_mean(
+        (A_true, mu_true, sigma_true)
+    )
 
     print(f"True parameters: A={A_true}, mu={mu_true}, sigma={sigma_true}")
 
@@ -236,7 +449,7 @@ def main():
     )
 
     td_smc = SequentialMonteCarlo(
-        steps = [
+        steps=[
             NestedSMCStep(
                 inner_smc,
                 posterior=tempered_posterior,
@@ -249,9 +462,12 @@ def main():
                 transformation=PulseAdditionTransformation(),
                 expected_block_size=dims_per_pulse,
                 metadata_key="n_dims",
-                posterior=tempered_posterior
+                posterior=tempered_posterior,
             ),
-        ]
+        ],
+        callbacks=[
+            make_inner_parameter_plot_callback(outdir, true_parameters)
+        ],
     )
 
     particles = np.zeros((n_particles, dims_per_pulse * n_pulses_start))
@@ -269,10 +485,10 @@ def main():
     )
 
     result = td_smc.run(
-        initial_state, 
-        rng=rng, 
+        initial_state,
+        rng=rng,
         shared_context=shared_context,
-        metadata=metadata
+        metadata=metadata,
     )
 
     nested_result = NestedSMCResult(result.context.outputs["inner_results"])
@@ -281,13 +497,25 @@ def main():
     for key, value in nested_result.summary().items():
         print(f"  {key}: {value}")
 
-    nested_result.results[0].plot_corner(labels=["A1", "mu1", "sigma1"], filename=outdir / "posterior_1.png")
-    nested_result.results[1].plot_corner(labels=["A1", "mu1", "sigma1", "A2", "mu2", "sigma2"], filename=outdir / "posterior_2.png")
-    # nested_result.results[0].plot_corner(labels=["A1", "mu1", "sigma1", "A2", "mu2", "sigma2"], filename=outdir / "posterior_2.png")
+    plot_physical_corner(
+        nested_result.results[0],
+        shared_context=shared_context,
+        filename=outdir / "posterior_1.png",
+        labels=["A1", "mu1", "sigma1"],
+        truths=true_parameters,
+    )
+    plot_physical_corner(
+        nested_result.results[1],
+        shared_context=shared_context,
+        filename=outdir / "posterior_2.png",
+        labels=["A1", "mu1", "sigma1", "A2", "mu2", "sigma2"],
+        truths=true_parameters,
+    )
+    # nested_result.results[2].plot_corner(labels=["A1", "mu1", "sigma1", "A2", "mu2", "sigma2", "A3", "mu3", "sigma3"], filename=outdir / "posterior_3.png")
 
     nested_result.plot_log_evidence()
     plt.savefig(outdir / "evidence_history.png")
-    
+
     # ln_evidences = result.log_evidence_history()
     # n_pulses_history = result.metadata_history("n_pulses")
     # evidence_per_n_pulses = {}
