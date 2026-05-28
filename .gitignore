@@ -207,6 +207,21 @@ marimo/_lsp/
 __marimo__/
 
 # Project specific ignores
+
+# Nessai output directories
+*_nessai
+
+# bilby result files
+*_result.json
+*_result.hdf5
+
+# Outdirs
 outdir*/
-*result.json
-*_nessai/
+
+# Figures
+*.png
+*.pdf
+
+# Checkpoint files
+*.pickle
+*.npz
