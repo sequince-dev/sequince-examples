@@ -113,7 +113,7 @@ def main():
     fig.savefig(outdir / "history.png")
 
     # Dump final result and posterior state to disk for later analysis
-    np.savez(outdir / "final_result.npz", **asdict(final_result))
+    result.save_to_file(outdir / "final_result.h5")
     np.savez(outdir / "posterior_state.npz", **asdict(posterior_state))
 
 

@@ -3,7 +3,7 @@ from typing import Any, Callable
 
 import numpy as np
 from array_api_compat import array_namespace
-from sequince.utils import in_bounds
+from sequince.utils.bounds import in_bounds
 
 
 @dataclass
