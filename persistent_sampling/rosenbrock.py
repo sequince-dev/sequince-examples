@@ -19,7 +19,6 @@ import numpy as np
 from sequince import (
     ParticleState,
     PersistentParticleState,
-    TemperedPosterior,
     make_persistent_bayesian_smc,
 )
 from sequince.log import configure_logging
@@ -38,12 +37,15 @@ def rosenbrock(particles: np.ndarray) -> np.ndarray:
     )
 
 
-def make_target(
+def make_likelihood_and_prior(
     dimensions: int,
     *,
     bound: float,
     scale: float,
-) -> TemperedPosterior:
+) -> tuple[
+    callable[[np.ndarray, StepContext], np.ndarray],
+    callable[[np.ndarray, StepContext], np.ndarray],
+]:
     """Construct a bounded Rosenbrock target."""
     log_prior_volume = dimensions * np.log(2.0 * bound)
 
@@ -57,9 +59,9 @@ def make_target(
         del context
         return -rosenbrock(particles) / scale
 
-    return TemperedPosterior(
-        log_prior=log_prior,
-        log_likelihood=log_likelihood,
+    return (
+        log_prior,
+        log_likelihood,
     )
 
 
@@ -127,7 +129,7 @@ def main() -> None:
     configure_logging()
 
     rng = np.random.default_rng(args.seed)
-    target = make_target(
+    log_prior, log_likelihood = make_likelihood_and_prior(
         args.dimensions,
         bound=args.bound,
         scale=args.rosenbrock_scale,
@@ -137,14 +139,7 @@ def main() -> None:
         args.bound,
         size=(args.n_particles, args.dimensions),
     )
-    initial_context = StepContext(t=0)
-    initial_state = ParticleState(
-        initial_particles,
-        evaluation=target.prepare_evaluation(
-            initial_particles,
-            initial_context,
-        ),
-    )
+    initial_state = ParticleState(initial_particles)
 
     bounds = {
         index: (-args.bound, args.bound) for index in range(args.dimensions)
@@ -178,8 +173,9 @@ def main() -> None:
         particle_transform = bounded_transform
         transform_refit = "once"
 
-    sampler = make_persistent_bayesian_smc(
-        target,
+    sampler, posterior, metadata = make_persistent_bayesian_smc(
+        log_prior=log_prior,
+        log_likelihood=log_likelihood,
         n_particles=args.n_particles,
         target_ess=target_ess,
         target_total_ess=args.target_total_ess,
@@ -190,6 +186,7 @@ def main() -> None:
     result = sampler.run(
         initial_state,
         rng=rng,
+        metadata=metadata,
     )
 
     final_state = result.final_state
@@ -204,7 +201,7 @@ def main() -> None:
     print()
     print(f"dimensions: {args.dimensions}")
     print(f"iterations: {len(result)}")
-    print(f"final beta: {float(result.context.metadata['temperature']):.6f}")
+    print(f"final beta: {float(result.context.metadata['beta']):.6f}")
     print(f"final archive size: {final_state.n_particles}")
     print(f"final persistent ESS: {final_state.effective_sample_size():.1f}")
     print(
