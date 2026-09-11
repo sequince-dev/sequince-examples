@@ -1,13 +1,12 @@
 import numpy as np
 from sequince import ParticleState, SequentialMonteCarlo
-from sequince.logging_utils import configure_logging
+from sequince.log import configure_logging
 from sequince.posterior import TemperedPosterior
-from sequince.result import NestedSMCResult
 from sequince.steps import (
     AdaptiveTemperedWeighting,
     LoggingStep,
+    MetaSMCStep,
     MiniPCNMutation,
-    NestedSMCStep,
     SystematicResampling,
 )
 from sequince.steps.base import StepContext
@@ -18,7 +17,7 @@ from sequince.transforms import AffineTransform
 
 def _active_particles(particles, context):
     n_dims = int(context.metadata["n_dims"])
-    return particles[:, :n_dims]
+    return np.atleast_2d(particles)[:, :n_dims]
 
 
 def log_likelihood(particles, context):
@@ -45,72 +44,16 @@ def log_prior(particles, context):
     return np.where(in_bounds, log_prior_value, -np.inf)
 
 
-class GaussianTemperedPosterior(TemperedPosterior):
-    """Posterior with a custom increment for one-dimensional expansions.
+def log_density_ratio(particles, context):
+    """Evaluate the bridge ratio using only the newly added coordinate.
 
-    After an expansion from ``d-1`` to ``d`` dimensions, the auxiliary proposal
-    draws the new coordinate from the prior, so the bridge increment reduces to
-    the Gaussian likelihood contribution of the final coordinate only.
+    The expansion proposal already contains the previous coordinates'
+    likelihood and the new coordinate's prior, so those terms cancel.
     """
-
-    def log_increment(
-        self,
-        particles,
-        context,
-        *,
-        log_proposal_override=None,
-    ):
-        if log_proposal_override is None:
-            return super().log_increment(
-                particles,
-                context,
-                log_proposal_override=log_proposal_override,
-            )
-
-        pts = np.atleast_2d(particles)
-        last_dim = pts[:, int(context.metadata["n_dims"]) - 1]
-        increments = -0.5 * last_dim**2 - 0.5 * np.log(2 * np.pi)
-        if particles.ndim == 1:
-            return np.array(increments[0], ndmin=1)
-        return increments
-
-    def log_prob(
-        self,
-        particles,
-        context,
-        *,
-        log_proposal_override=None,
-    ):
-        if log_proposal_override is None:
-            return super().log_prob(
-                particles,
-                context,
-                log_proposal_override=log_proposal_override,
-            )
-
-        pts = np.atleast_2d(particles)
-        n_dims = int(context.metadata["n_dims"])
-        beta = float(context.metadata.get("temperature", 0.0))
-
-        log_prior_vals = log_prior(pts, context)
-
-        if n_dims <= 0:
-            result = log_prior_vals
-        else:
-            previous = pts[:, : n_dims - 1]
-            previous_log_like = np.zeros(pts.shape[0], dtype=float)
-            if previous.shape[1] > 0:
-                previous_log_like = -0.5 * np.sum(
-                    previous**2, axis=-1
-                ) - 0.5 * previous.shape[1] * np.log(2 * np.pi)
-
-            last_dim = pts[:, n_dims - 1]
-            new_log_like = -0.5 * last_dim**2 - 0.5 * np.log(2 * np.pi)
-            result = log_prior_vals + previous_log_like + beta * new_log_like
-
-        if particles.ndim == 1:
-            return float(result[0])
-        return result
+    pts = np.atleast_2d(particles)
+    last_dim = pts[:, int(context.metadata["n_dims"]) - 1]
+    values = -0.5 * last_dim**2 - 0.5 * np.log(2 * np.pi)
+    return float(values[0]) if particles.ndim == 1 else values
 
 
 class GaussianExpansionTransformation(SMCTransformation):
@@ -128,12 +71,15 @@ class GaussianExpansionTransformation(SMCTransformation):
         return state.with_updates(particles=expanded_particles)
 
     def inverse(self, particles, context):
-        return particles[:, :-1]
+        return particles[..., :-1]
+
+    def log_jacobian(self, particles, context):
+        return 0.0
 
     def log_auxiliary_density(self, particles, context):
         lower_bound = context.shared["lower_bound"]
         upper_bound = context.shared["upper_bound"]
-        new_block = particles[:, -1:]
+        new_block = np.atleast_2d(particles)[:, -1:]
         in_bounds = np.all(
             (new_block >= lower_bound) & (new_block <= upper_bound),
             axis=-1,
@@ -154,37 +100,33 @@ def logging_str_fn(state: ParticleState, context: StepContext) -> str:
 
 
 def inner_logging_str_fn(state: ParticleState, context: StepContext) -> str:
-    temperature = context.metadata["temperature"]
+    beta = context.metadata["beta"]
     log_evidence = state.log_evidence
     return (
         f"  inner it {context.t}:, "
-        f"Temperature: {temperature:.4f}, "
+        f"Beta: {beta:.4f}, "
         f"Log Evidence: {log_evidence:.1f}"
     )
 
 
 def stop_predicate(state, context):
-    return (
-        context.t > 0
-        and int(context.metadata["n_dims"]) >= context.shared["target_dims"]
-    )
+    return int(context.metadata["n_dims"]) >= context.shared["target_dims"]
 
 
-def main():
+def main(*, n_particles=5_000, target_dims=4, mutation_steps=50, plot=True):
     configure_logging(level="INFO")
 
     rng = np.random.default_rng(1235)
 
     initial_dims = 0
-    target_dims = 4
 
     lower_bound = -np.exp(3) / 2
     upper_bound = np.exp(3) / 2
 
-    n_particles = 5_000
-    tempered_posterior = GaussianTemperedPosterior(
+    tempered_posterior = TemperedPosterior(
         log_likelihood=log_likelihood,
         log_prior=log_prior,
+        log_density_ratio=log_density_ratio,
     )
 
     shared_context = {
@@ -195,6 +137,8 @@ def main():
 
     metadata = {
         "n_dims": initial_dims,
+        # Each newly added coordinate starts its own tempering bridge.
+        "beta": 0.0,
     }
     transformation = GaussianExpansionTransformation()
 
@@ -203,13 +147,13 @@ def main():
             AdaptiveTemperedWeighting(
                 tempered_posterior,
                 target_ess_ratio=0.9,
-                max_temperature=1.0,
+                max_beta=1.0,
                 min_delta=1e-8,
             ),
             SystematicResampling(always_resample=True),
             MiniPCNMutation(
                 tempered_posterior,
-                n_steps=50,
+                n_steps=mutation_steps,
                 step_fn="tpcn",
                 transform=AffineTransform(),
             ),
@@ -225,7 +169,7 @@ def main():
                 metadata_key="n_dims",
                 posterior=tempered_posterior,
             ),
-            NestedSMCStep(
+            MetaSMCStep(
                 inner_runner,
                 posterior=tempered_posterior,
                 record_outputs=True,
@@ -244,7 +188,7 @@ def main():
         ),
         log_weights=np.full(n_particles, -np.log(n_particles)),
         metadata={
-            "temperature": 0.0,
+            "beta": 0.0,
             "n_dims": initial_dims,
         },
     )
@@ -255,19 +199,23 @@ def main():
         shared_context=shared_context,
         metadata=metadata,
     )
-    nested_result = NestedSMCResult(result.context.outputs["inner_results"])
+    meta_result = result.get_meta_results("inner_results")
+    if meta_result is None:
+        raise RuntimeError("The meta SMC step did not record inner results.")
 
     print("Run summary:")
-    for key, value in nested_result.summary().items():
-        if key != "final_temperature":
+    for key, value in meta_result.summary().items():
+        if key != "final_beta":
             print(f"{key}: {value}")
 
     true_log_evidence = -np.log(upper_bound - lower_bound) * target_dims
     print(f"True log evidence: {true_log_evidence:.5f}")
 
-    nested_result.final_result.plot_corner(
-        filename="transdimensional_gaussian_corner.png"
-    )
+    if plot:
+        meta_result.final_result.plot_corner(
+            filename="transdimensional_gaussian_corner.png"
+        )
+    return meta_result
 
 
 if __name__ == "__main__":
