@@ -1,125 +1,143 @@
+"""Waste-free SMC for a standard Gaussian likelihood and uniform prior."""
+
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.ticker import MaxNLocator
 from sequince import ParticleState, SequentialMonteCarlo, TemperedPosterior
-from sequince.proposals import GaussianRandomWalk
+from sequince.log import configure_logging
 from sequince.steps import (
     AdaptiveTemperedWeighting,
+    LoggingStep,
+    StepContext,
     WasteFreeResampleMove,
 )
-
-# Number of dimensions in the multivariate normal model
-dims = 4
-# Mean and standard deviation of the target normal distribution
-mu = 0.0
-sigma = 1.0
-# Prior bounds
-bounds = (-10, 10)
-# True log evidence for the model with uniform prior over the bounds
-true_log_evidence = -dims * np.log(np.ptp(bounds))
+from sequince.steps.mutation import (
+    GaussianRandomWalk,
+    MetropolisHastingsMutation,
+)
 
 
-def log_likelihood(particles: np.ndarray, context) -> np.ndarray:
-    """Log-likelihood for a multivariate standard normal observation."""
-    return -0.5 * np.sum(np.square(particles - mu) / sigma**2, axis=-1) - (
-        dims / 2
-    ) * np.log(2 * np.pi * sigma**2)
+def log_likelihood(particles: np.ndarray) -> np.ndarray:
+    """Return normalized standard Gaussian log densities."""
+    dims = particles.shape[1]
+    return -0.5 * np.sum(particles**2, axis=1) - 0.5 * dims * np.log(2 * np.pi)
 
 
-def log_prior(particles: np.ndarray, context) -> np.ndarray:
-    """Uniform prior over a bounded region."""
-    lower_bound = context.shared["lower_bound"]
-    upper_bound = context.shared["upper_bound"]
+def log_prior(particles: np.ndarray, context: StepContext) -> np.ndarray:
+    """Return normalized uniform log densities inside the prior box."""
+    lower, upper = context.shared["bounds"]
+    inside = np.all((particles >= lower) & (particles <= upper), axis=1)
     return np.where(
-        (particles >= lower_bound) & (particles <= upper_bound), 0.0, -np.inf
-    ).sum(axis=-1)
+        inside, -particles.shape[1] * np.log(upper - lower), -np.inf
+    )
 
 
 def main() -> None:
+    logger = configure_logging()
+    dims = 4
+    bounds = (-10.0, 10.0)
+    n_chains = 100
+    chain_length = 100  # Includes the resampled starting state.
+    n_particles = n_chains * chain_length
     rng = np.random.default_rng(123)
+    initial = ParticleState(rng.uniform(*bounds, size=(n_particles, dims)))
+    posterior = TemperedPosterior(log_prior, log_likelihood)
 
-    lower_bound, upper_bound = bounds
-    n_particles = 1000
-    initial_particles = rng.uniform(
-        low=lower_bound, high=upper_bound, size=(n_particles, dims)
-    )
-    initial_log_weights = np.full(n_particles, -np.log(n_particles))
-    initial_state = ParticleState(
-        particles=initial_particles,
-        log_weights=initial_log_weights,
-        metadata={"temperature": 0.0},
-    )
-
-    posterior = TemperedPosterior(
-        log_prior=log_prior,
-        log_likelihood=log_likelihood,
-    )
-
-    # Instantiate the SMC algorithm with adaptive tempering and waste-free moves
-    # The steps are:
-    # 1. Adapt the temperature to reach a target ESS ratio of 0.75
-    # 2. Perform a waste-free resample-move step with a Gaussian random-walk proposal
     smc = SequentialMonteCarlo(
         steps=[
-            AdaptiveTemperedWeighting(
-                posterior,
-                target_ess_ratio=0.75,
-            ),
+            AdaptiveTemperedWeighting(posterior, target_ess_ratio=0.85),
             WasteFreeResampleMove(
-                posterior,
-                proposal=GaussianRandomWalk(scale=0.7),
-                resample_ancestors=True,
-                proposals_per_particle=10,
+                MetropolisHastingsMutation(
+                    posterior, GaussianRandomWalk(scale=0.7)
+                ),
+                chain_length=chain_length,
+            ),
+            LoggingStep(
+                str_fn=lambda state, context: (
+                    f"Stage {context.t + 1}: "
+                    f"beta={float(context.metadata['beta']):.4f}, "
+                    f"log evidence={float(state.log_evidence):.4f}"
+                )
             ),
         ]
     )
-
-    results = smc.run(
-        initial_state,
-        rng=rng,
-        shared_context={
-            "lower_bound": lower_bound,
-            "upper_bound": upper_bound,
-            "temperature": 0.0,
-        },
+    results = smc.run(initial, rng=rng, shared_context={"bounds": bounds})
+    particles = results.final_state.particles
+    moves = [stage[1] for stage in results.outputs]
+    # Gaussian truncation at +/-10 has negligible effect on this reference.
+    reference_log_evidence = -dims * np.log(bounds[1] - bounds[0])
+    logger.info("Final beta: %.3f", float(results.context.metadata["beta"]))
+    logger.info(
+        "Estimated log evidence: %.4f", results.final_state.log_evidence
     )
-    posterior_state = results.final_state
-
-    log_evidence = posterior_state.log_evidence
-    print(f"Estimated log evidence: {log_evidence:.4f}")
-    print(f"True log evidence:      {true_log_evidence:.4f}")
-    print(
-        "Final waste-free acceptance:",
-        posterior_state.metadata.get("waste_free_acceptance"),
-    )
-    print(
-        "Acceptance by round:",
-        posterior_state.metadata.get("waste_free_acceptance"),
+    logger.info("Reference log evidence: %.4f", reference_log_evidence)
+    logger.info("Posterior means (reference: 0): %s", particles.mean(axis=0))
+    logger.info(
+        "Posterior variances (reference: 1): %s", particles.var(axis=0)
     )
 
-    particles = posterior_state.particles
-    mean_estimate = np.mean(particles, axis=0)
-    cov_estimate = np.cov(particles, rowvar=False)
-    print(f"Posterior mean estimate: {mean_estimate}")
-    print(f"Posterior covariance estimate:\n{cov_estimate}")
-
-    fig, axes = plt.subplots(3, 1, figsize=(6, 10))
-    results.plot_metadata_history("temperature", ax=axes[0])
-    axes[0].set_title("Adaptive temperature")
-
-    results.plot_log_evidence(ax=axes[1])
-    axes[1].set_title("Log evidence trajectory")
-
-    results.plot_metadata_history(
-        "waste_free_acceptance",
-        ax=axes[2],
-        default=np.nan,
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4), layout="constrained")
+    fig.suptitle(
+        f"Waste-free SMC: {n_chains} chains × {chain_length} retained states"
     )
-    axes[2].set_ylabel("Acceptance probability")
-    axes[2].set_xlabel("Iteration")
-    axes[2].set_title("Waste-free acceptance history")
+    stages = np.arange(1, len(moves) + 1)
+    axes[0].plot(stages, results.metadata_history("beta"), "o-", color="C0")
+    axes[0].set(title="Adaptive tempering", ylabel=r"$\beta$", ylim=(0, 1.05))
+    axes[1].plot(
+        stages, results.log_evidence_history(), "o-", color="C1", label="SMC"
+    )
+    axes[1].axhline(
+        reference_log_evidence,
+        color="black",
+        linestyle="--",
+        label="Reference",
+    )
+    axes[1].legend()
+    axes[1].set(title="Log evidence", ylabel=r"$\log Z$")
+    for ax in axes[:2]:
+        ax.set(xlabel="Stage", xlim=(0.5, len(moves) + 0.5))
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
 
-    fig.tight_layout()
-    fig.savefig("waste_free_history.png")
+    # Waste-free output is ordered by chain position, then chain index.
+    chains = particles.reshape(chain_length, n_chains, dims)
+    positions = np.arange(chain_length)
+    for i in range(3):
+        axes[2].plot(
+            positions,
+            chains[:, i, 0],
+            ".-",
+            color=f"C{i}",
+            markersize=4,
+            alpha=0.8,
+            label="All retained states" if i == 0 else None,
+        )
+    for position, marker, label in (
+        (0, "s", "Resampled starts"),
+        (chain_length - 1, "X", "Endpoints"),
+    ):
+        axes[2].scatter(
+            np.full(3, position),
+            chains[position, :3, 0],
+            marker=marker,
+            color="black",
+            zorder=3,
+            label=label,
+        )
+    axes[2].set(
+        title="Final stage: three retained chains",
+        xlabel="Chain position (flat segments = rejections)",
+        ylabel=r"$x_0$",
+    )
+    axes[2].xaxis.set_major_locator(MaxNLocator(integer=True))
+    axes[2].legend(fontsize="small")
+
+    for ax in axes:
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.set_axisbelow(True)
+        ax.grid(alpha=0.2)
+    fig.savefig("waste_free_history.png", dpi=180)
+    plt.close(fig)
+    logger.info("Saved waste_free_history.png")
 
 
 if __name__ == "__main__":
