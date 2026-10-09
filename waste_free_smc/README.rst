@@ -2,7 +2,7 @@ Waste-free sequential Monte Carlo
 ================================
 
 `run_waste_free_smc.py <run_waste_free_smc.py>`_ samples a four-dimensional
-standard Gaussian likelihood with a uniform prior on ``[-10, 10]^4`` using
+correlated Gaussian likelihood with a uniform prior on ``[-10, 10]^4`` using
 waste-free sequential Monte Carlo (SMC), as described by `Dau & Chopin`_.
 ``LoggingStep`` reports the temperature and log evidence at each stage.
 The script also logs the final temperature, log evidence and posterior
@@ -10,9 +10,17 @@ moments, and saves ``waste_free_history.png`` with three panels: the
 temperature schedule, log evidence with its reference and retained chains.
 Stage numbers in the plots match the log messages.
 
-The chain panel shows the first coordinate of three final-stage chains.
+The Gaussian has zero mean and covariance
+``covariance[i, j] = 0.8 ** abs(i - j)``: each marginal has variance one,
+while adjacent coordinates have correlation 0.8. A Cholesky solve evaluates
+the normalized likelihood. The fixed isotropic proposal must explore the
+resulting elongated target.
+
+The chain panel shows the first two coordinates of three final-stage chains
+over Gaussian marginal density contours at Mahalanobis radii 1, 2 and 3.
 Squares mark resampled starts, crosses mark endpoints and every dot is a
-retained state. Flat segments show repeated states after rejected proposals.
+retained state. Repeated states after rejected proposals overlap in this
+projection; they remain separate particles in the retained population.
 Waste-free SMC keeps all 100 positions per chain, rather than just the
 endpoints. The full population contains 100 such chains, giving 10,000
 retained particles; only three trajectories are shown for clarity.
@@ -51,7 +59,9 @@ not an independent-sample effective sample size. There is no additional
 resampling inside the waste-free step after the chains run.
 
 The final temperature should reach one, posterior means should approach
-zero and marginal variances should approach one. The reference log
+zero, marginal variances should approach one and the estimated covariance
+should approach the specified matrix. The script logs both covariance
+matrices. The reference log
 evidence is ``-4 * log(20)`` (approximately -11.983), neglecting the tiny
 Gaussian mass outside the prior box. Both densities include their
 normalization constants so the evidence has the intended scale.
