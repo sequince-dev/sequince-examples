@@ -1,29 +1,10 @@
 Waste-free sequential Monte Carlo
 ================================
 
-`run_waste_free_smc.py <run_waste_free_smc.py>`_ samples a four-dimensional
-correlated Gaussian likelihood with a uniform prior on ``[-10, 10]^4`` using
-waste-free sequential Monte Carlo (SMC), as described by `Dau & Chopin`_.
-``LoggingStep`` reports the temperature and log evidence at each stage.
-The script also logs the final temperature, log evidence and posterior
-moments, and saves ``waste_free_history.png`` with three panels: the
-temperature schedule, log evidence with its reference and retained chains.
-Stage numbers in the plots match the log messages.
-
-The Gaussian has zero mean and covariance
-``covariance[i, j] = 0.8 ** abs(i - j)``: each marginal has variance one,
-while adjacent coordinates have correlation 0.8. A Cholesky solve evaluates
-the normalized likelihood. The fixed isotropic proposal must explore the
-resulting elongated target.
-
-The chain panel shows the first two coordinates of three final-stage chains
-over Gaussian marginal density contours at Mahalanobis radii 1, 2 and 3.
-Squares mark resampled starts, crosses mark endpoints and every dot is a
-retained state. Repeated states after rejected proposals overlap in this
-projection; they remain separate particles in the retained population.
-Waste-free SMC keeps all 100 positions per chain, rather than just the
-endpoints. The full population contains 100 such chains, giving 10,000
-retained particles; only three trajectories are shown for clarity.
+`run_waste_free_smc.py <run_waste_free_smc.py>`_ demonstrates waste-free
+sequential Monte Carlo (SMC), as described by `Dau & Chopin`_, alongside a
+standard resample-move SMC run. Both sample a four-dimensional correlated
+Gaussian likelihood with a uniform prior on ``[-10, 10]^4``.
 
 Run from this directory using an environment with Sequince, NumPy and
 Matplotlib installed:
@@ -32,38 +13,60 @@ Matplotlib installed:
 
    python run_waste_free_smc.py
 
-The script defines normalized log-likelihood and log-prior functions:
+Wrap a mutation step to retain its full chains:
+
+.. code-block:: python
+
+   WasteFreeResampleMove(
+       MetropolisHastingsMutation(posterior, GaussianRandomWalk(scale=0.7)),
+       chain_length=100,
+   )
+
+With N = 10,000 input particles and chain length P = 100, the waste-free
+step resamples M = N / P = 100 starts, runs P - 1 = 99 transitions per
+chain and retains all 100 samples, including each start and repeats after
+rejection. The output has 10,000 uniformly weighted particles.
+``chain_length`` includes the start and must divide N.
+
+For comparison, standard SMC explicitly resamples and mutates:
+
+.. code-block:: python
+
+   MultinomialResampling(always_resample=True)
+   MetropolisHastingsMutation(
+       posterior, GaussianRandomWalk(scale=0.7), n_steps=99
+   )
+
+The standard run maintains 100 particles and keeps each chain's endpoint.
+Both runs use the same target, proposal, tempering ESS ratio and 100 chains
+with 99 transitions each per stage. This matches mutation work per stage;
+initial population sizes and adaptive temperature schedules differ, so
+stage counts and total target evaluations can differ. The script logs
+likelihood evaluation counts alongside posterior moments. Retained
+waste-free samples are correlated, and their count is not an
+independent-sample effective sample size. One run of each method illustrates
+usage, rather than establishing relative statistical efficiency.
+
+``LoggingStep`` reports temperature and log evidence at each stage. The
+final log summary compares posterior counts, stage counts, likelihood
+evaluations and evidence estimates, and quotes the retained-count ratio.
+The single figure, ``waste_free_history.png``, compares the inverse-temperature
+schedules. Stage numbers match the log messages. The legend and logs quote
+the final posterior counts: 100 endpoints for standard SMC and 10,000
+retained samples for waste-free SMC. Both populations have uniform weights;
+the larger retained count does not imply 100 times as many independent
+samples.
+
+The target has zero mean and covariance
+``covariance[i, j] = 0.8 ** abs(i - j)``. Posterior means should approach
+zero and marginal variances should approach one. The evidence reference is
+``-4 * log(20)`` (approximately -11.983), neglecting the tiny Gaussian mass
+outside the prior box. Both densities include their normalization constants.
+
+The target densities and complete sampler setup are shown below:
 
 .. literalinclude:: run_waste_free_smc.py
    :language: python
-   :start-at: def log_likelihood(
-   :end-before: def main(
-
-It then draws particles from the prior and combines adaptive tempering with
-``WasteFreeResampleMove``, wrapping a Metropolis-Hastings mutation with a
-fixed Gaussian random-walk proposal:
-
-.. literalinclude:: run_waste_free_smc.py
-   :language: python
-   :pyobject: main
-
-At each stage, adaptive tempering reweights all N = 10,000 particles and
-updates the evidence estimate. The waste-free step resamples M = 100 chain
-starts, runs P - 1 = 99 transitions per chain and retains all P = 100
-states, including each start and repeated states after rejection. The
-output contains N = M * P uniformly weighted particles. ``chain_length``
-includes the start and must divide N.
-
-Retained states within each chain are correlated: the particle count is
-not an independent-sample effective sample size. There is no additional
-resampling inside the waste-free step after the chains run.
-
-The final temperature should reach one, posterior means should approach
-zero, marginal variances should approach one and the estimated covariance
-should approach the specified matrix. The script logs both covariance
-matrices. The reference log
-evidence is ``-4 * log(20)`` (approximately -11.983), neglecting the tiny
-Gaussian mass outside the prior box. Both densities include their
-normalization constants so the evidence has the intended scale.
+   :linenos:
 
 .. _Dau & Chopin: https://arxiv.org/abs/2011.02328
