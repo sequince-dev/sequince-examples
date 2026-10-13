@@ -1,31 +1,56 @@
-"""Adapt the mutation length between SMC iterations using acceptance."""
+"""Adapt mutation budgets for a Rosenbrock posterior. See README.rst."""
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
-from orng import RandomGenerator
 from sequince import SequentialMonteCarlo, TemperedPosterior
 from sequince.callbacks import AdaptiveMutationPlot
 from sequince.log import configure_logging
-from sequince.plot import plot_corner
 from sequince.state import ParticleState
 from sequince.steps import (
     AdaptiveTemperedWeighting,
     AdaptMutationSteps,
     DifferentialEvolutionMutation,
     LoggingStep,
+    StepContext,
     SystematicResampling,
 )
 from sequince.steps.mutation.adaptive.policies.acceptance import (
     AcceptanceRatePolicy,
 )
 
+# Edit these parameters to explore the example.
+n_particles = 1000
+n_dimensions = 8
+rosenbrock_scale = 1.0
+lower_bound, upper_bound = -5.0, 5.0
+seed = 1234
+target_steps = 5  # Target accepted moves per particle, not attempted moves.
+initial_steps = 5 * n_dimensions
+min_steps, max_steps = 1, 128
+outdir = Path("outdir")
 
-def log_likelihood(particles: np.ndarray, context) -> np.ndarray:
-    """Rosenbrock potential with configurable scale."""
+
+def log_likelihood(particles: np.ndarray, context: StepContext) -> np.ndarray:
+    """Evaluate an unnormalized Rosenbrock likelihood.
+
+    Parameters
+    ----------
+    particles : numpy.ndarray, shape (n_particles, n_dimensions)
+        Batch of parameter vectors, with at least two dimensions.
+    context : StepContext
+        Runtime context containing the positive Rosenbrock scale.
+
+    Returns
+    -------
+    log_density : numpy.ndarray, shape (n_particles,)
+        Negative Rosenbrock potential divided by the scale. Evidence uses
+        this unnormalized likelihood convention.
+    """
     scale = context.shared["rosenbrock_scale"]
     x = particles[..., :-1]
     y = particles[..., 1:]
@@ -33,8 +58,21 @@ def log_likelihood(particles: np.ndarray, context) -> np.ndarray:
     return -potential / scale
 
 
-def log_prior(particles: np.ndarray, context) -> np.ndarray | float:
-    """Uniform density within the configured box."""
+def log_prior(particles: np.ndarray, context: StepContext) -> np.ndarray:
+    """Evaluate a normalized uniform prior within the configured box.
+
+    Parameters
+    ----------
+    particles : numpy.ndarray, shape (n_particles, n_dimensions)
+        Batch of parameter vectors.
+    context : StepContext
+        Runtime context whose shared mapping contains the prior bounds.
+
+    Returns
+    -------
+    log_density : numpy.ndarray, shape (n_particles,)
+        Log prior density, with negative infinity outside the bounds.
+    """
     lower = context.shared["bounds"][:, 0]
     upper = context.shared["bounds"][:, 1]
     in_bounds = np.all((particles >= lower) & (particles <= upper), axis=-1)
@@ -43,21 +81,11 @@ def log_prior(particles: np.ndarray, context) -> np.ndarray | float:
 
 
 def main() -> None:
-    # Configure logging and random number generator
+    """Run adaptive SMC and save diagnostic plots, particles, and results."""
     logger = configure_logging(level=logging.INFO)
-
-    seed = 1234
-    rng = RandomGenerator(backend="numpy", seed=seed)
-
-    # Define the problem parameters
-    n_particles = 1000
-    dims = 8
-    rosenbrock_scale = 1.0
-    bounds = np.array([[-5.0, 5.0]]).repeat(dims, axis=0)
-
-    # Define output directory and parameter labels for plotting
-    labels = [f"x{i + 1}" for i in range(dims)]
-    outdir = Path("./")
+    rng = np.random.default_rng(seed)
+    bounds = np.tile([lower_bound, upper_bound], (n_dimensions, 1))
+    outdir.mkdir(parents=True, exist_ok=True)
 
     # Define a tempered posterior with the log prior and log likelihood
     # functions.
@@ -66,26 +94,9 @@ def main() -> None:
         log_likelihood=log_likelihood,
     )
 
-    # Create the base mutation step
-    # This will be wrapped in an adaptive mutation step that adjusts the number
-    # of mutation steps.
-    # We pass the posterior to the mutation step so that it can use the
-    # log prior and log likelihood functions.
+    # Freeze each stage's budget before mutation. Its completed acceptance
+    # rate determines the next stage's budget, within the configured bounds.
     fixed_length_mutation = DifferentialEvolutionMutation(posterior)
-
-    # Define the target number of mutation steps and the minimum and maximum
-    # allowed steps
-    target_steps = 5
-    min_steps, max_steps = 1, 128
-
-    # Create the adaptive mutation step that will adjust the number of mutation
-    # steps based on the acceptance rate of the previous iteration.
-    # This includes a 'policy' that defines how to update the number of steps
-    # based on the acceptance rate.
-    # The policy is set to target a specific number of mutation steps, with
-    # minimum and maximum bounds on the number of steps.
-    # Other policies could be implemented to adapt the number of steps or
-    # other parameters of the mutation step based on different criteria.
     adaptive_mutation = AdaptMutationSteps(
         fixed_length_mutation,
         policy=AcceptanceRatePolicy(
@@ -93,14 +104,17 @@ def main() -> None:
             min_steps=min_steps,
             max_steps=max_steps,
         ),
-        initial_steps=5 * dims,
+        initial_steps=initial_steps,
         min_steps=min_steps,
         max_steps=max_steps,
     )
 
     # Define a logging function to report the current state of the SMC
     # algorithm
-    def mutation_log_message(state, context) -> str:
+    def mutation_log_message(
+        state: ParticleState, context: StepContext
+    ) -> str:
+        """Report the completed budget and the next stage's decision."""
         del state
         return (
             f"SMC iteration {context.iteration}: "
@@ -130,7 +144,7 @@ def main() -> None:
     initial_particles = rng.uniform(
         bounds[:, 0],
         bounds[:, 1],
-        size=(n_particles, dims),
+        size=(n_particles, n_dimensions),
     )
     initial_state = ParticleState(initial_particles)
 
@@ -147,21 +161,33 @@ def main() -> None:
         },
     )
 
-    # Extract the log evidence and its standard error from the result
-    log_evidence = result.log_evidence()
-    log_evidence_std = result.log_evidence_error()
-    logger.info(f"Log evidence: {log_evidence:.4f} ± {log_evidence_std:.4f}")
+    state = result.final_state
+    logger.info("Estimated log evidence: %.4f", state.log_evidence)
+    logger.info("Posterior mean: %s", result.weighted_mean())
+    logger.info("Posterior covariance:\n%s", result.weighted_covariance())
 
-    # Plot the final posterior samples using a corner plot.
-    # We use rejection sampling to obtain unweighted samples from the
-    # posterior.
-    posterior_samples, weights = result.posterior_samples(method="rejection")
-    plot_corner(
-        posterior_samples,
-        weights=weights,
-        parameter_labels=labels,
-        filename=outdir / "adaptive_mutation_steps_corner.png",
+    fig = result.plot_corner(
+        parameter_labels=[f"x{i + 1}" for i in range(n_dimensions)]
     )
+    fig.savefig(outdir / "corner.png")
+    plt.close(fig)
+
+    fig, axes = plt.subplots(2, 1, figsize=(6, 6))
+    result.plot_metadata_history("beta", ax=axes[0])
+    axes[0].set_ylabel("Tempering parameter beta")
+    result.plot_log_evidence(ax=axes[1])
+    fig.tight_layout()
+    fig.savefig(outdir / "history.png")
+    plt.close(fig)
+
+    # Keep weights with particles so subsequent analysis remains valid.
+    np.savez(
+        outdir / "posterior.npz",
+        particles=state.particles,
+        weights=state.weights,
+        log_evidence=state.log_evidence,
+    )
+    result.save_to_file(outdir / "result.h5")
 
 
 if __name__ == "__main__":
