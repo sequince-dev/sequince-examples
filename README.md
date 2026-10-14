@@ -26,7 +26,5 @@ Run `make -C docs check` for tests, lint, and formatting checks, or `make -C doc
 individual targets. New example runs refresh Sequince main; all jobs in a batch
 use the same resolved lock. Later, the dependency will switch to releases.
 
-See [setup and maintenance](MAINTENANCE.rst) for dependency access, adding
-examples, publication and Read the Docs Community subproject setup. Generated
-results are ignored. Environments, dependencies, and tasks are defined in
+Generated results are ignored. Environments, dependencies, and tasks are defined in
 `pyproject.toml`; `pixi.lock` is intentionally tracked for reproducibility.
