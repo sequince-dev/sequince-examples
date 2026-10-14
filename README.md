@@ -3,13 +3,6 @@
 Tutorials demonstrating Bayesian inference and particle filtering with Sequince.
 Example scripts and their explanations live together under `examples/`.
 
-Start with the [basic examples](examples/basic_examples/README.rst), then explore
-[adaptive mutation](examples/adaptive_mutation_steps/README.rst),
-[flow preconditioning](examples/preconditioning/README.rst),
-[persistent sampling](examples/persistent_sampling/README.rst),
-[waste-free SMC](examples/waste_free_smc/README.rst), and
-[particle filtering](examples/particle_filtering/README.rst).
-
 ## Documentation
 
 The tutorials are collected in the [documentation](docs/index.rst), with plots
