@@ -1,7 +1,7 @@
 Waste-free sequential Monte Carlo
-================================
+=================================
 
-`run_waste_free_smc.py <run_waste_free_smc.py>`_ demonstrates waste-free
+:download:`run_waste_free_smc.py <run_waste_free_smc.py>` demonstrates waste-free
 sequential Monte Carlo (SMC), as described by `Dau & Chopin`_, alongside a
 standard resample-move SMC run. Both sample a four-dimensional correlated
 Gaussian likelihood with a uniform prior on ``[-10, 10]^4``.
@@ -62,6 +62,19 @@ The target has zero mean and covariance
 zero and marginal variances should approach one. The evidence reference is
 ``-4 * log(20)`` (approximately -11.983), neglecting the tiny Gaussian mass
 outside the prior box. Both densities include their normalization constants.
+
+Example plots
+-------------
+
+.. figure:: /_generated/results/waste-free/waste_free_history.png
+   :alt: Adaptive tempering schedules for standard and waste-free SMC. Retained sample counts do not measure the number of independent samples.
+
+   Adaptive tempering schedules for standard and waste-free SMC. Retained sample counts do not measure the number of independent samples.
+
+:download:`Run provenance </_generated/results/waste-free/metadata.json>`.
+
+Complete script
+---------------
 
 The target densities and complete sampler setup are shown below:
 

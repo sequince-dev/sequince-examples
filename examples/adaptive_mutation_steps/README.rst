@@ -117,6 +117,28 @@ Try lowering ``max_steps`` to see the budget saturate, or increasing
 ``min_steps <= initial_steps <= max_steps`` and ``n_dimensions >= 2``.
 Retain weights when loading ``posterior.npz`` for further analysis.
 
+Example results
+~~~~~~~~~~~~~~~
+
+:download:`Download script <adaptive_mutation_steps.py>`.
+
+.. figure:: /_generated/results/adaptive-mutation/adaptive_mutation_history.png
+   :alt: Executed mutation budgets, acceptance rates, and expected accepted moves across SMC stages.
+
+   Executed mutation budgets, acceptance rates, and expected accepted moves across SMC stages.
+
+.. figure:: /_generated/results/adaptive-mutation/corner.png
+   :alt: Weighted marginal and joint distributions for the eight-dimensional Rosenbrock posterior.
+
+   Weighted marginal and joint distributions for the eight-dimensional Rosenbrock posterior.
+
+.. figure:: /_generated/results/adaptive-mutation/history.png
+   :alt: Temperature and log evidence through the adaptive mutation run.
+
+   Temperature and log evidence through the adaptive mutation run.
+
+:download:`Run provenance </_generated/results/adaptive-mutation/metadata.json>`.
+
 The full sampler setup is shown below:
 
 .. literalinclude:: adaptive_mutation_steps.py

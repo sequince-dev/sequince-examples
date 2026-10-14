@@ -6,18 +6,29 @@ the zuko backend.
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
+import numpy as np
 import torch
 from orng import RandomGenerator
+from sequince.array_api import to_numpy
 from sequince.callbacks import IntermediateParticlesPlot, ParticleTransformPlot
 from sequince.log import configure_logging
 from sequince.plot import plot_corner
 from sequince.prebuilt_samplers import make_standard_bayesian_smc
+from sequince.result import SMCResult
 from sequince.state import ParticleState
 from sequince.transforms import AffineTransform, FlowTransform
 from sequince_density.flows.zuko import ZukoFlow
+
+seed = 1234
+n_particles = 1000
+dims = 4
+rosenbrock_scale = 1.0
+outdir = Path("./")
+documentation_output: Path | None = None
 
 
 def rosenbrock(x: torch.Tensor) -> torch.Tensor:
@@ -43,19 +54,31 @@ def log_likelihood(particles: torch.Tensor, context) -> torch.Tensor | float:
     return values
 
 
+def _documentation_summary(result: SMCResult) -> dict[str, object]:
+    """Summarize the weighted empirical measure on the host for JSON output."""
+    state = result.final_state
+    particles = to_numpy(state.particles)
+    weights = to_numpy(state.weights)
+    mean = np.sum(particles * weights[:, None], axis=0) / weights.sum()
+    centered = particles - mean
+    # The pinned Sequince revision uses a NumPy-only transpose signature in
+    # weighted_covariance. Host arrays keep this documentation step portable.
+    covariance = (centered * weights[:, None]).T @ centered / weights.sum()
+    return {
+        "log_evidence": float(state.log_evidence),
+        "weighted_mean": mean.tolist(),
+        "weighted_population_covariance": covariance.tolist(),
+        "n_particles": len(particles),
+    }
+
+
 def main() -> None:
     logger = configure_logging(level=logging.INFO)
 
-    seed = 1234
-
     rng = RandomGenerator(backend="torch", seed=seed)
 
-    n_particles = 1000
-    dims = 4
-    rosenbrock_scale = 1.0
     bounds = torch.tensor([[-5.0, 5.0]]).repeat(dims, 1)
     labels = [f"x{i + 1}" for i in range(dims)]
-    outdir = Path("./")
 
     # Define the normalizing flow to use for preconditioning.
     # We use a Masked Autoregressive Flow (MAF) with 2 transforms and 2 hidden
@@ -118,6 +141,12 @@ def main() -> None:
         metadata=metadata,
         shared_context=shared_context,
     )
+
+    if documentation_output is not None:
+        summary = _documentation_summary(result)
+        (documentation_output / "summary.json").write_text(
+            json.dumps(summary, allow_nan=False) + "\n"
+        )
 
     # Compute the log evidence and its standard deviation from the SMC result.
     log_evidence = result.log_evidence()

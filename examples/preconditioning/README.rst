@@ -10,10 +10,6 @@ kernel can explore more efficiently.
 particle transform. The flow must implement the
 ``sequince.flows.NormalizingFlow`` protocol:
 
-.. autoclass:: sequince.flows.NormalizingFlow
-   :members:
-   :undoc-members:
-
 Construct the transform by passing it a compatible flow and, optionally, the
 keyword arguments used to fit that flow:
 
@@ -33,11 +29,11 @@ The resulting object can be used anywhere a particle transform is accepted by
 Fitting the flow
 ----------------
 
-The fitting of the transform is handle by the mutation step. The frequency
+The fitting of the transform is handled by the mutation step. The frequency
 of fitting can be controlled by the ``transform_refit`` argument.
 Current options are:
 
-- ``"always"``: fit the every time the mutation step is called (default)
+- ``"always"``: fit the flow every time the mutation step is called (default)
 - ``"once"``: fit the first time the mutation step is called, then reuse
 - ``"per-context"``: fit once per unique context, then reuse for that context
 
@@ -48,9 +44,12 @@ Prebuilt flows
 --------------
 
 ``sequince-density`` provides various normalizing flows that can be used for
-preconditioning via the ``zuko`   and `flowjax` packages. See the
+preconditioning via the ``zuko`` and ``flowjax`` packages. See the
 ``sequince_density.flows.zuko`` and ``sequince_density.flows.flowjax`` modules
 for more information.
+
+Continue with :doc:`../persistent_sampling/README` to combine this approach
+with persistent sampling.
 
 Example
 -------
@@ -58,6 +57,18 @@ Example
 The following example uses a Zuko masked autoregressive flow to precondition a
 four-dimensional Rosenbrock target. It requires ``sequince-density`` with its
 Zuko backend and PyTorch support.
+
+Example plots
+-------------
+
+.. figure:: /_generated/results/flow-preconditioning/rosenbrock_corner.png
+   :alt: Posterior marginals and joint distributions for the four-dimensional Rosenbrock target sampled with flow preconditioning.
+
+   Posterior marginals and joint distributions for the four-dimensional Rosenbrock target sampled with flow preconditioning.
+
+:download:`Run provenance </_generated/results/flow-preconditioning/metadata.json>`.
+
+:download:`Download the script <flow_preconditioning.py>`.
 
 .. literalinclude:: flow_preconditioning.py
    :language: python
