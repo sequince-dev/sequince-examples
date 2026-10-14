@@ -1,0 +1,173 @@
+name: Example documentation
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SEQUINCE_LOCK_READY: "1"
+
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.manifest.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: prefix-dev/setup-pixi@v0.9.3
+        with:
+          pixi-version: v0.81.0
+          manifest-path: pyproject.toml
+          run-install: false
+          cache: false
+      - name: Resolve current Sequince main once for this workflow
+        run: pixi update sequince
+      - uses: actions/upload-artifact@v4
+        with:
+          name: execution-lock
+          path: pixi.lock
+          retention-days: 14
+          if-no-files-found: error
+      - id: manifest
+        run: echo "matrix=$(python3 scripts/docs_pipeline.py matrix)" >> "$GITHUB_OUTPUT"
+
+  examples:
+    needs: manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.manifest.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: execution-lock
+          path: .
+      - uses: prefix-dev/setup-pixi@v0.9.3
+        with:
+          pixi-version: v0.81.0
+          manifest-path: pyproject.toml
+          environments: ${{ matrix.environment }}
+          cache: true
+          locked: true
+      - run: pixi run --locked -e '${{ matrix.environment }}' example '${{ matrix.id }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: example-${{ matrix.id }}
+          path: build-docs/outputs/${{ matrix.id }}/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: log-${{ matrix.id }}
+          path: build-docs/*.log
+          retention-days: 7
+
+  documentation:
+    needs: examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: execution-lock
+          path: .
+      - uses: prefix-dev/setup-pixi@v0.9.3
+        with:
+          pixi-version: v0.81.0
+          manifest-path: pyproject.toml
+          environments: docs check
+          cache: true
+          locked: true
+      # No run-id: download-artifact takes artifacts from this workflow run.
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: example-*
+          path: build-docs/downloads
+      - name: Collect example artifacts from this workflow
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import shutil
+          from pathlib import Path
+          destination = Path('build-docs/outputs')
+          destination.mkdir(parents=True)
+          for example in json.loads(Path('docs/examples.json').read_text())['examples']:
+              shutil.move(Path('build-docs/downloads') / ('example-' + example['id']), destination / example['id'])
+          PYTHON
+      - run: pixi run --locked -e check test
+      - run: pixi run --locked -e check lint
+      - run: pixi run --locked -e check format-check
+      - run: pixi run --locked -e docs docs
+      - run: pixi run --locked -e docs bundle
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validated-bundle
+          path: |
+            build-docs/docs-outputs-*.tar.gz
+            build-docs/docs-outputs-*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: documentation-html
+          path: docs/_build/html/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: documentation
+    if: github.repository == 'sequince-dev/sequince-examples' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    concurrency:
+      group: examples-rtd-latest
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: execution-lock
+          path: .
+      - uses: actions/download-artifact@v4
+        with:
+          name: validated-bundle
+          path: build-docs
+      - name: Verify same-run bundle before publication
+        run: |
+          python3 - <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          from docs_pipeline import ROOT, OUTPUT, digest, git, unpack
+          sha = git('rev-parse', 'HEAD')
+          path = ROOT / 'build-docs' / f'docs-outputs-{sha}.tar.gz'
+          assert Path(str(path) + '.sha256').read_text().split() == [digest(path), path.name]
+          unpack(path, sha, OUTPUT)
+          PY
+      - name: Publish durable assets and wait for RTD
+        run: python3 scripts/publish_docs.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RTD_TOKEN: ${{ secrets.RTD_TOKEN }}
+          RTD_PROJECT: ${{ vars.RTD_PROJECT }}
