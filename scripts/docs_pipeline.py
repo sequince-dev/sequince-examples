@@ -58,9 +58,9 @@ def entry(name: str) -> dict:
     raise ValueError(f"Unknown example: {name}")
 
 
-def dependency_commit() -> str:
+def dependency_commit() -> str | None:
     """Read Sequince's resolved commit from the execution lock."""
-    return git_dependencies({})["sequince"]
+    return git_dependencies({}).get("sequince")
 
 
 def git_dependencies(example: dict) -> dict[str, str]:
@@ -97,9 +97,50 @@ def git_dependencies(example: dict) -> dict[str, str]:
     return revisions
 
 
+def resolved_versions(example: dict) -> dict[str, str]:
+    """Read exact package versions, rejecting stale Git locks for releases."""
+    config = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"][
+        "pixi"
+    ]
+    lock = (ROOT / "pixi.lock").read_text()
+    records = re.findall(
+        r"^- pypi: ([^\n]+)\n  name: ([^\n]+)\n  version: ([^\n]+)",
+        lock,
+        re.MULTILINE,
+    )
+    versions = {}
+    for feature in ["cpu", *example.get("dependency_features", [])]:
+        for package, specification in (
+            config["feature"][feature].get("pypi-dependencies", {}).items()
+        ):
+            matches = [
+                (source, version)
+                for source, name, version in records
+                if name == package
+            ]
+            found = {version for _, version in matches}
+            if len(found) != 1:
+                raise ValueError(
+                    f"Missing or inconsistent locked version: {package}"
+                )
+            if not (
+                isinstance(specification, dict) and "git" in specification
+            ):
+                if any("git+" in source for source, _ in matches):
+                    raise ValueError(
+                        f"Stale Git lock for {package}; run pixi update sequince sequince-density after the releases are available"
+                    )
+            versions[package] = found.pop()
+    return versions
+
+
 def refresh() -> None:
-    """Resolve current Sequince main once before a new execution batch."""
-    subprocess.run(["pixi", "update", "sequince"], cwd=ROOT, check=True)
+    """Resolve the latest released dependencies once per execution batch."""
+    subprocess.run(
+        ["pixi", "update", "sequince", "sequince-density"],
+        cwd=ROOT,
+        check=True,
+    )
 
 
 def source_hashes(example: dict) -> dict[str, str]:
@@ -121,16 +162,24 @@ def worker(name: str, raw: Path, destination: Path) -> None:
 
     example = entry(name)
     revisions = git_dependencies(example)
-    versions = {}
-    for package, revision in revisions.items():
+    versions = resolved_versions(example)
+    for package, version in versions.items():
         distribution = importlib.metadata.distribution(package)
+        if distribution.version != version:
+            raise ValueError(
+                f"Installed {package} version differs from the execution lock"
+            )
         direct = json.loads(distribution.read_text("direct_url.json") or "{}")
         resolved = direct.get("vcs_info", {}).get("commit_id")
-        if resolved != revision:
+        if package in revisions:
+            if resolved != revisions[package]:
+                raise ValueError(
+                    f"Installed {package} commit differs from the execution lock"
+                )
+        elif "vcs_info" in direct:
             raise ValueError(
-                f"Installed {package} commit {resolved} != pinned {revision}"
+                f"Expected a release of {package}, found a Git installation"
             )
-        versions[package] = distribution.version
     spec = importlib.util.spec_from_file_location(
         "documentation_example", ROOT / example["script"]
     )
@@ -197,7 +246,7 @@ def worker(name: str, raw: Path, destination: Path) -> None:
             "source_commit": git("rev-parse", "HEAD"),
             "source_hashes": source_hashes(example),
             "sequince_version": importlib.metadata.version("sequince"),
-            "sequince_commit": revisions["sequince"],
+            "sequince_commit": revisions.get("sequince"),
             "git_dependencies": revisions,
             "dependency_versions": versions,
             "python_version": sys.version.split()[0],
@@ -294,6 +343,8 @@ def validate(base: Path | None = None) -> None:
             "source_commit": git("rev-parse", "HEAD"),
             "source_hashes": source_hashes(example),
             "sequince_commit": dependency_commit(),
+            "sequince_version": resolved_versions(example)["sequince"],
+            "dependency_versions": resolved_versions(example),
             "git_dependencies": git_dependencies(example),
             "environment": example["environment"],
         }
@@ -305,7 +356,7 @@ def validate(base: Path | None = None) -> None:
         if metadata["seed"] != metadata["parameters"]["seed"]:
             raise ValueError(f"Seed mismatch: {directory}")
         versions = metadata.get("dependency_versions", {})
-        if set(versions) != set(git_dependencies(example)) or not all(
+        if set(versions) != set(resolved_versions(example)) or not all(
             versions.values()
         ):
             raise ValueError(

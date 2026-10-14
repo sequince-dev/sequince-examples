@@ -13,6 +13,28 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import docs_pipeline as pipeline  # noqa: E402
 
+read_resolved_versions = pipeline.resolved_versions
+
+
+@pytest.fixture(autouse=True)
+def release_versions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Use synthetic release versions; no unavailable packages are resolved."""
+    monkeypatch.setattr(
+        pipeline,
+        "resolved_versions",
+        lambda example: {
+            name: "test-version"
+            for name in [
+                "sequince",
+                *(
+                    ["sequince-density"]
+                    if example.get("dependency_features")
+                    else []
+                ),
+            ]
+        },
+    )
+
 
 @pytest.fixture
 def outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -32,13 +54,10 @@ def outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
                 "example": example["id"],
                 "source_commit": "a" * 40,
                 "source_hashes": pipeline.source_hashes(example),
-                "sequince_version": "0.1.dev1",
+                "sequince_version": "test-version",
                 "sequince_commit": pipeline.dependency_commit(),
                 "git_dependencies": pipeline.git_dependencies(example),
-                "dependency_versions": {
-                    name: "test-version"
-                    for name in pipeline.git_dependencies(example)
-                },
+                "dependency_versions": pipeline.resolved_versions(example),
                 "environment": example["environment"],
                 "seed": 42,
                 "parameters": {key: 42 for key in example["parameters"]},
@@ -225,6 +244,8 @@ def test_prepared_worker_without_sampling(
             version="test-version",
             read_text=lambda filename: json.dumps(
                 {"vcs_info": {"commit_id": revisions[package]}}
+                if package in revisions
+                else {}
             ),
         ),
     )
@@ -290,3 +311,40 @@ def test_execution_batch_refreshes_once(
     assert calls[0] == "refresh"
     assert len(calls) == len(pipeline.examples()) + 1
     assert all(call["env"]["SEQUINCE_LOCK_READY"] == "1" for call in calls[1:])
+
+
+@pytest.mark.parametrize(
+    "source, version, error",
+    [
+        ("https://files.pythonhosted.org/sequince.whl", "0.1.0", None),
+        (
+            "git+https://github.com/sequince-dev/sequince@abc",
+            "0.1.0",
+            "Stale Git lock",
+        ),
+        (None, None, "Missing or inconsistent locked version"),
+    ],
+)
+def test_release_lock_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source: str | None,
+    version: str | None,
+    error: str | None,
+) -> None:
+    """Accept a release lock and reject missing or obsolete Git records."""
+    monkeypatch.setattr(pipeline, "ROOT", tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.pixi.feature.cpu.pypi-dependencies]\n"
+        'sequince = { version = "*" }\n'
+    )
+    (tmp_path / "pixi.lock").write_text(
+        f"- pypi: {source}\n  name: sequince\n  version: {version}\n"
+        if source
+        else ""
+    )
+    if error:
+        with pytest.raises(ValueError, match=error):
+            read_resolved_versions({})
+    else:
+        assert read_resolved_versions({}) == {"sequince": version}
