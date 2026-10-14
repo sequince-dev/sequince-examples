@@ -1,30 +1,37 @@
 # Sequince examples
 
-Example scripts and their narrative tutorials live together under `examples/`.
+Tutorials demonstrating Bayesian inference and particle filtering with Sequince.
+Example scripts and their explanations live together under `examples/`.
+
 Start with the [basic examples](examples/basic_examples/README.rst), then explore
 [adaptive mutation](examples/adaptive_mutation_steps/README.rst),
-[flow preconditioning](examples/preconditioning/README.rst), and
-[persistent sampling](examples/persistent_sampling/README.rst). The documentation
-also covers waste-free SMC and particle filtering.
+[flow preconditioning](examples/preconditioning/README.rst),
+[persistent sampling](examples/persistent_sampling/README.rst),
+[waste-free SMC](examples/waste_free_smc/README.rst), and
+[particle filtering](examples/particle_filtering/README.rst).
 
-The documentation pipeline is configured to execute Gaussian, Rosenbrock,
-adaptive mutation, flow preconditioning, persistent sampling, and waste-free
-SMC and particle-filtering examples using the latest Sequince main, resolved
-once per execution batch. Their plots appear directly in the tutorial pages.
+## Documentation
 
-```bash
-pixi install --locked -e default -e docs
-pixi run --locked examples
-pixi run --locked -e docs docs
-```
+The tutorials are collected in the [documentation](docs/index.rst), with plots
+from the example scripts. See the [contributing guidelines](CONTRIBUTING.md)
+for instructions on building the documentation locally.
 
-Use `make -C docs setup` followed by `make -C docs docs` to build the full documentation.
-Valid example outputs are reused; missing or stale outputs trigger example
-execution. `make -C docs docs-only` never executes examples. Use `make -C docs validate` to run
-checks, rerun all examples, and build the documentation.
-Run `make -C docs check` for tests, lint, and formatting checks, or `make -C docs help` for
-individual targets. New example runs refresh Sequince main; all jobs in a batch
-use the same resolved lock. Later, the dependency will switch to releases.
+## Contributing
 
-Generated results are ignored. Environments, dependencies, and tasks are defined in
-`pyproject.toml`; `pixi.lock` is intentionally tracked for reproducibility.
+Bug reports, feature requests, and pull requests are welcome via the GitHub
+repository. Please see the [contributing guidelines](CONTRIBUTING.md)
+and [AI policy](https://github.com/sequince-dev/sequince/blob/main/AI_POLICY.md).
+
+## Related repositories
+
+The following repositories are part of the `sequince` ecosystem:
+
+- [`sequince`](https://github.com/sequince-dev/sequince): the main sampling framework
+- [`sequince-density`](https://github.com/sequince-dev/sequince-density): density estimation and preconditioning
+- [`sequince-bilby`](https://github.com/sequince-dev/sequince-bilby): interfaces for using Sequince samplers with Bilby
+- [`orng`](https://github.com/sequince-dev/orng): cross-backend random number generation
+- [`acai`](https://github.com/sequince-dev/acai): array-API compatible control flow and iteration
+
+## License
+
+Licensed under the [MIT License](LICENSE).
