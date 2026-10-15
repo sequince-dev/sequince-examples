@@ -27,8 +27,8 @@ jobs:
           manifest-path: pyproject.toml
           run-install: false
           cache: false
-      - name: Resolve current Sequince main once for this workflow
-        run: pixi update sequince
+      - name: Resolve released dependencies once for this workflow
+        run: pixi update sequince sequince-density
       - uses: actions/upload-artifact@v4
         with:
           name: execution-lock

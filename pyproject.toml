@@ -18,7 +18,7 @@ requires-pixi = ">=0.81.0"
 python = "3.13.*"
 
 [tool.pixi.feature.cpu.pypi-dependencies]
-sequince = { git = "https://github.com/sequince-dev/sequince.git", branch = "main", extras = ["corner", "hdf5"] }
+sequince = { version = "*", extras = ["corner", "hdf5"] }
 
 [tool.pixi.feature.jax.pypi-dependencies]
 jax = ">0.5.3"
@@ -30,7 +30,7 @@ JAX_PLATFORMS = "cpu"
 pytorch-cpu = "*"
 
 [tool.pixi.feature.flow.pypi-dependencies]
-sequince-density = { git = "https://github.com/sequince-dev/sequince-flows.git", rev = "cbe32939713f17be2c5deb8f813ba1ec4550ea7e", extras = ["zuko"] }
+sequince-density = { version = "*", extras = ["zuko"] }
 
 [tool.pixi.feature.docs.dependencies]
 sphinx = "8.2.*"

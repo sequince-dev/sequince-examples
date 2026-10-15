@@ -11,8 +11,8 @@ ENV ?= default
 
 help:
 	@printf '%s\n' \
-	  'make setup         Refresh Sequince main and install environments' \
-	  'make refresh       Resolve current Sequince main without sampling' \
+	  'make setup         Refresh released dependencies and install environments' \
+	  'make refresh       Resolve released dependencies without sampling' \
 	  'make check         Run tests, lint and formatting checks' \
 	  'make test          Run pipeline tests' \
 	  'make lint          Run Ruff lint checks' \
@@ -26,7 +26,7 @@ help:
 	  'make validate      Run checks, all examples, then build docs'
 
 refresh:
-	cd "$(REPO_ROOT)" && $(PIXI) update sequince
+	cd "$(REPO_ROOT)" && $(PIXI) update sequince sequince-density
 
 setup: refresh
 	cd "$(REPO_ROOT)" && $(PIXI) install --locked -e default -e docs -e check
