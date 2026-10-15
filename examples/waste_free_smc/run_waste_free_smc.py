@@ -1,5 +1,8 @@
 """Waste-free SMC for a correlated Gaussian likelihood and uniform prior."""
 
+import json
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
 from sequince import ParticleState, SequentialMonteCarlo, TemperedPosterior
@@ -15,6 +18,14 @@ from sequince.steps.mutation import (
     GaussianRandomWalk,
     MetropolisHastingsMutation,
 )
+
+dims = 4
+bounds = (-10.0, 10.0)
+correlation = 0.8
+n_chains = 100
+chain_length = 100  # Includes the resampled starting state.
+seed = 123
+documentation_output: Path | None = None
 
 
 def log_likelihood(particles: np.ndarray, context: StepContext) -> np.ndarray:
@@ -34,17 +45,12 @@ def log_prior(particles: np.ndarray, context: StepContext) -> np.ndarray:
 
 def main() -> None:
     logger = configure_logging()
-    dims = 4
-    bounds = (-10.0, 10.0)
-    correlation = 0.8
     indices = np.arange(dims)
     covariance = correlation ** np.abs(indices[:, None] - indices[None, :])
     cholesky = np.linalg.cholesky(covariance)
     log_norm = (
         -0.5 * dims * np.log(2 * np.pi) - np.log(np.diag(cholesky)).sum()
     )
-    n_chains = 100
-    chain_length = 100  # Includes the resampled starting state.
     posterior = TemperedPosterior(log_prior, log_likelihood)
     # Truncation at +/-10 has negligible effect on the evidence reference.
     reference_log_evidence = -dims * np.log(bounds[1] - bounds[0])
@@ -52,6 +58,8 @@ def main() -> None:
     fig, ax = plt.subplots(figsize=(7, 4), layout="constrained")
     comparison_rows: list[str] = []
     posterior_counts: dict[str, int] = {}
+
+    summaries: dict[str, dict] = {}
 
     for name in ("Standard", "Waste-free"):
         mutation = MetropolisHastingsMutation(
@@ -69,7 +77,7 @@ def main() -> None:
             moves = [MultinomialResampling(always_resample=True), mutation]
 
         logger.info("%s SMC: %d particles", name, n_particles)
-        rng = np.random.default_rng(123)
+        rng = np.random.default_rng(seed)
         initial = ParticleState(rng.uniform(*bounds, size=(n_particles, dims)))
         smc = SequentialMonteCarlo(
             steps=[
@@ -104,6 +112,16 @@ def main() -> None:
             name,
             particles.var(axis=0),
         )
+        if documentation_output is not None:
+            summaries[name] = {
+                "log_evidence": float(results.final_state.log_evidence),
+                "weighted_mean": results.weighted_mean().tolist(),
+                "weighted_population_covariance": results.weighted_covariance().tolist(),
+                "n_particles": len(particles),
+                "likelihood_evaluations": int(
+                    results.context.evaluation_counts.log_likelihood_evaluations
+                ),
+            }
         posterior_counts[name] = len(particles)
         comparison_rows.append(
             f"{name:<12} {len(particles):>10,d} {len(results.outputs):>8d} "
@@ -142,7 +160,12 @@ def main() -> None:
     ax.spines[["top", "right"]].set_visible(False)
     ax.grid(alpha=0.2)
     ax.legend()
-    fig.savefig("waste_free_history.png", dpi=180)
+    output_directory = documentation_output or Path(".")
+    fig.savefig(output_directory / "waste_free_history.png", dpi=180)
+    if documentation_output is not None:
+        (documentation_output / "summary.json").write_text(
+            json.dumps(summaries, allow_nan=False) + "\n"
+        )
     plt.close(fig)
     logger.info("Saved waste_free_history.png")
 

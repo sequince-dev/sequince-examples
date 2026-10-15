@@ -1,0 +1,192 @@
+{
+  "schema": 1,
+  "examples": [
+    {
+      "id": "gaussian",
+      "title": "Gaussian posterior",
+      "script": "examples/basic_examples/gaussian.py",
+      "working_directory": "examples/basic_examples",
+      "environment": "default",
+      "timeout": 600,
+      "narrative": "examples/basic_examples/gaussian.rst",
+      "parameters": [
+        "n_dimensions",
+        "n_particles",
+        "lower_bound",
+        "upper_bound",
+        "mean",
+        "sigma",
+        "seed"
+      ],
+      "figures": {
+        "corner.png": "Weighted marginal and joint posterior distributions for the Gaussian target.",
+        "history.png": "Adaptive temperature and accumulated log evidence at each SMC stage."
+      },
+      "required_outputs": [
+        "corner.png",
+        "history.png",
+        "posterior.npz",
+        "result.h5"
+      ]
+    },
+    {
+      "id": "rosenbrock",
+      "title": "Rosenbrock posterior",
+      "script": "examples/basic_examples/rosenbrock.py",
+      "working_directory": "examples/basic_examples",
+      "environment": "default",
+      "timeout": 600,
+      "narrative": "examples/basic_examples/rosenbrock.rst",
+      "parameters": [
+        "n_dimensions",
+        "n_particles",
+        "lower_bound",
+        "upper_bound",
+        "a",
+        "b",
+        "seed"
+      ],
+      "figures": {
+        "corner.png": "Weighted posterior samples along the curved Rosenbrock valley.",
+        "history.png": "Temperature and log evidence for the unnormalized Rosenbrock likelihood."
+      },
+      "required_outputs": [
+        "corner.png",
+        "history.png",
+        "posterior.npz",
+        "result.h5"
+      ]
+    },
+    {
+      "id": "adaptive-mutation",
+      "title": "Adaptive mutation steps",
+      "script": "examples/adaptive_mutation_steps/adaptive_mutation_steps.py",
+      "working_directory": "examples/adaptive_mutation_steps",
+      "environment": "default",
+      "timeout": 1200,
+      "narrative": "examples/adaptive_mutation_steps/README.rst",
+      "parameters": [
+        "n_dimensions",
+        "n_particles",
+        "lower_bound",
+        "upper_bound",
+        "rosenbrock_scale",
+        "seed",
+        "target_steps",
+        "initial_steps",
+        "min_steps",
+        "max_steps"
+      ],
+      "figures": {
+        "adaptive_mutation_history.png": "Executed mutation budgets, acceptance rates, and expected accepted moves across SMC stages.",
+        "corner.png": "Weighted marginal and joint distributions for the eight-dimensional Rosenbrock posterior.",
+        "history.png": "Temperature and log evidence through the adaptive mutation run."
+      },
+      "required_outputs": [
+        "adaptive_mutation_history.png",
+        "corner.png",
+        "history.png",
+        "posterior.npz",
+        "result.h5"
+      ]
+    },
+    {
+      "id": "flow-preconditioning",
+      "title": "Flow preconditioning",
+      "script": "examples/preconditioning/flow_preconditioning.py",
+      "working_directory": "examples/preconditioning",
+      "environment": "flow",
+      "timeout": 2400,
+      "narrative": "examples/preconditioning/README.rst",
+      "parameters": [
+        "dims",
+        "n_particles",
+        "rosenbrock_scale",
+        "seed"
+      ],
+      "dependency_features": [
+        "flow"
+      ],
+      "figures": {
+        "rosenbrock_corner.png": "Posterior marginals and joint distributions for the four-dimensional Rosenbrock target sampled with flow preconditioning."
+      },
+      "required_outputs": [
+        "rosenbrock_corner.png",
+        "summary.json"
+      ]
+    },
+    {
+      "id": "persistent-sampling",
+      "title": "Persistent sampling",
+      "script": "examples/persistent_sampling/rosenbrock.py",
+      "working_directory": "examples/persistent_sampling",
+      "environment": "default",
+      "timeout": 1200,
+      "narrative": "examples/persistent_sampling/README.rst",
+      "parameters": [
+        "dimensions",
+        "n_particles",
+        "target_ess",
+        "target_total_ess",
+        "mutation_steps",
+        "flow",
+        "bound",
+        "rosenbrock_scale",
+        "seed"
+      ],
+      "figures": {
+        "corner.png": "Posterior marginals and joint distributions from the persistent Rosenbrock run, using the script defaults."
+      },
+      "required_outputs": [
+        "corner.png",
+        "summary.json"
+      ]
+    },
+    {
+      "id": "waste-free",
+      "title": "Waste-free SMC",
+      "script": "examples/waste_free_smc/run_waste_free_smc.py",
+      "working_directory": "examples/waste_free_smc",
+      "environment": "default",
+      "timeout": 1200,
+      "narrative": "examples/waste_free_smc/README.rst",
+      "parameters": [
+        "dims",
+        "bounds",
+        "correlation",
+        "n_chains",
+        "chain_length",
+        "seed"
+      ],
+      "figures": {
+        "waste_free_history.png": "Adaptive tempering schedules for standard and waste-free SMC. Retained sample counts do not measure the number of independent samples."
+      },
+      "required_outputs": [
+        "waste_free_history.png",
+        "summary.json"
+      ]
+    },
+    {
+      "id": "particle-filtering",
+      "title": "Particle filtering",
+      "script": "examples/particle_filtering/particle_filter.py",
+      "working_directory": "examples/particle_filtering",
+      "environment": "default",
+      "timeout": 600,
+      "narrative": "examples/particle_filtering/README.rst",
+      "parameters": [
+        "particles",
+        "observations",
+        "seed",
+        "ess_threshold"
+      ],
+      "figures": {
+        "particle_filter.png": "Bootstrap and locally optimal particle filters compared with the exact Kalman filter, including effective sample size before resampling."
+      },
+      "required_outputs": [
+        "particle_filter.png",
+        "summary.json"
+      ]
+    }
+  ]
+}

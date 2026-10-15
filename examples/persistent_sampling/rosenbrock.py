@@ -13,6 +13,7 @@ normalizing-flow preconditioning instead of the default bounded transform.
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +26,8 @@ from sequince.log import configure_logging
 from sequince.plot import plot_corner
 from sequince.steps import StepContext
 from sequince.transforms import BoundedToUnboundedTransform
+
+documentation_output: Path | None = None
 
 
 def rosenbrock(particles: np.ndarray) -> np.ndarray:
@@ -212,6 +215,22 @@ def main() -> None:
     print(f"best Rosenbrock potential: {float(np.min(potentials)):.6g}")
     print(f"best particle: {np.array2string(best, precision=3)}")
     print(f"final log evidence: {float(final_state.log_evidence):+.6f}")
+
+    if documentation_output is not None:
+        summary = {
+            "log_evidence": float(final_state.log_evidence),
+            "weighted_mean": weighted_mean.tolist(),
+            "archive_size": int(final_state.n_particles),
+            "effective_sample_size": float(
+                final_state.effective_sample_size()
+            ),
+            "weighted_mean_potential": float(weighted_mean_potential),
+        }
+        (documentation_output / "summary.json").write_text(
+            json.dumps(summary, allow_nan=False) + "\n"
+        )
+        if args.output is None:
+            args.output = documentation_output / "corner.png"
 
     if not args.no_plot:
         output = args.output or Path(__file__).with_name(

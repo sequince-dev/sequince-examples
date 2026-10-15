@@ -8,6 +8,7 @@ from Sequince's general SMC steps and checked against an exact Kalman filter.
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -24,6 +25,9 @@ from sequince.steps.resampling import ResamplingOutput
 
 if TYPE_CHECKING:
     from orng import RandomGenerator
+
+
+documentation_output: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -553,7 +557,8 @@ def plot_comparison(comparison: ProposalComparison, output: Path) -> None:
     plt.close(figure)
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser used for execution and documentation metadata."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--particles", type=int, default=1_000)
     parser.add_argument("--observations", type=int, default=20)
@@ -569,7 +574,11 @@ def main() -> None:
         type=Path,
         default=Path(__file__).with_name("particle_filter.png"),
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
     comparison = run_comparison(
         n_observations=args.observations,
         n_particles=args.particles,
@@ -601,6 +610,38 @@ def main() -> None:
         f"{comparison.bootstrap_log_evidence:.4f} / "
         f"{comparison.kalman_log_evidence:.4f}"
     )
+    if documentation_output is not None:
+        args.output = documentation_output / "particle_filter.png"
+        summary = {
+            "mean_rmse": {
+                "optimal": rmse(
+                    comparison.proposal_means, comparison.kalman_means
+                ),
+                "bootstrap": rmse(
+                    comparison.bootstrap_means, comparison.kalman_means
+                ),
+            },
+            "variance_rmse": {
+                "optimal": rmse(
+                    comparison.proposal_variances, comparison.kalman_variances
+                ),
+                "bootstrap": rmse(
+                    comparison.bootstrap_variances, comparison.kalman_variances
+                ),
+            },
+            "mean_ess_before_resampling": {
+                "optimal": float(np.mean(comparison.proposal_ess)),
+                "bootstrap": float(np.mean(comparison.bootstrap_ess)),
+            },
+            "log_evidence": {
+                "optimal": comparison.proposal_log_evidence,
+                "bootstrap": comparison.bootstrap_log_evidence,
+                "kalman": comparison.kalman_log_evidence,
+            },
+        }
+        (documentation_output / "summary.json").write_text(
+            json.dumps(summary, allow_nan=False) + "\n"
+        )
     plot_comparison(comparison, args.output)
     print(f"wrote {args.output}")
 

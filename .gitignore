@@ -225,3 +225,7 @@ outdir*/
 # Checkpoint files
 *.pickle
 *.npz
+
+# Documentation execution, bundles and generated Sphinx sources
+build-docs/
+docs/_generated/

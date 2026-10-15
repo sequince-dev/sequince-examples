@@ -1,11 +1,9 @@
-import matplotlib.pyplot as plt
 import cupy as cp
-
+import matplotlib.pyplot as plt
+from orng import ArrayRNG
 from sequince import ParticleState
 from sequince.logging_utils import configure_logging
-from sequince.posterior import draw_additional_samples
 from sequince.prebuilt_samplers import make_standard_bayesian_smc
-from orng import ArrayRNG
 
 # Number of dimensions in the multivariate normal model
 dims = 4
@@ -20,10 +18,9 @@ true_log_evidence = -dims * cp.log(cp.array(20.0))
 
 def log_likelihood(particles: cp.ndarray, context) -> cp.ndarray:
     """Log-likelihood for a multivariate standard normal observation."""
-    return (
-        -0.5 * cp.sum(cp.square(particles - mu) / sigma**2, axis=-1)
-        - (dims / 2) * cp.log(2 * cp.pi * sigma**2)
-    )
+    return -0.5 * cp.sum(cp.square(particles - mu) / sigma**2, axis=-1) - (
+        dims / 2
+    ) * cp.log(2 * cp.pi * sigma**2)
 
 
 def log_prior(particles: cp.ndarray, context) -> cp.ndarray:
@@ -37,7 +34,7 @@ def log_prior(particles: cp.ndarray, context) -> cp.ndarray:
 
 def main() -> None:
     # Create a CuPy RNG
-    rng = ArrayRNG(backend='cupy', seed=42)
+    rng = ArrayRNG(backend="cupy", seed=42)
 
     # Enable logging
     configure_logging()
@@ -45,12 +42,15 @@ def main() -> None:
     # Initialize particles from the prior
     lower_bound, upper_bound = bounds
     n_particles = 1000
-    initial_particles = rng.uniform(low=lower_bound, high=upper_bound, size=(n_particles, dims))
-    initial_log_weights = cp.full((n_particles,), -cp.log(cp.array(n_particles)))
+    initial_particles = rng.uniform(
+        low=lower_bound, high=upper_bound, size=(n_particles, dims)
+    )
+    initial_log_weights = cp.full(
+        (n_particles,), -cp.log(cp.array(n_particles))
+    )
 
     initial_state = ParticleState(
-        particles=initial_particles,
-        log_weights=initial_log_weights
+        particles=initial_particles, log_weights=initial_log_weights
     )
 
     # Use the prebuilt SMC with MiniPCN mutation
