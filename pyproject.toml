@@ -22,6 +22,7 @@ sequince = { version = "*", extras = ["corner", "hdf5"] }
 
 [tool.pixi.feature.jax.pypi-dependencies]
 jax = ">0.5.3"
+blackjax = ">=1.2"
 
 [tool.pixi.feature.jax.activation.env]
 JAX_PLATFORMS = "cpu"
