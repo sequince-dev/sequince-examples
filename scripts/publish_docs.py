@@ -39,16 +39,8 @@ def wait_idle(project: str, deadline: float) -> None:
         time.sleep(20)
 
 
-def main() -> None:
-    """Publish only main, verify assets, and monitor the triggered build."""
-    sha = git("rev-parse", "HEAD")
-    if git("ls-remote", "origin", "refs/heads/main").split()[0] != sha:
-        print("Main has advanced; skipping stale publication")
-        return
-    if set(git("diff", "--name-only", "HEAD").splitlines()) - {"pixi.lock"}:
-        raise ValueError("Refusing publication from a modified checkout")
-    path = bundle()
-    tag = f"docs-output-{sha}"
+def publish_assets(path: Path, tag: str, target: str) -> None:
+    """Publish a bundle and checksum without replacing existing assets."""
     # Dedicated prereleases in the examples repository cannot become a library
     # release or GitHub's latest software release.
     view = subprocess.run(
@@ -63,11 +55,11 @@ def main() -> None:
             "create",
             tag,
             "--target",
-            sha,
+            target,
             "--title",
             tag,
             "--notes",
-            f"Validated example documentation outputs for {sha}.",
+            f"Example documentation outputs: {tag}.",
             "--prerelease",
             "--latest=false",
             "--draft",
@@ -98,14 +90,13 @@ def main() -> None:
             gh("release", "upload", tag, str(asset))
     if release["isDraft"]:
         gh("release", "edit", tag, "--draft=false", "--latest=false")
-    # The workflow's non-cancelling concurrency lock covers this whole wait.
-    project = urllib.parse.quote(os.environ["RTD_PROJECT"], safe="")
-    deadline = time.monotonic() + 2400
-    wait_idle(project, deadline)
-    if git("ls-remote", "origin", "refs/heads/main").split()[0] != sha:
-        print("Bundle uploaded; main advanced, skipping latest trigger")
-        return
-    result = rtd(f"projects/{project}/versions/latest/builds/", "POST")
+
+
+def build_version(
+    project: str, version: str, sha: str, deadline: float
+) -> None:
+    """Trigger and monitor an RTD version, requiring the expected commit."""
+    result = rtd(f"projects/{project}/versions/{version}/builds/", "POST")
     build_id = result["build"]["id"]
     while True:
         build = rtd(f"projects/{project}/builds/{build_id}/")
@@ -119,9 +110,28 @@ def main() -> None:
     if not build["success"] or build["commit"] != sha:
         raise ValueError(
             f"RTD build {build_id} failed or checked out another commit; "
-            "inspect RTD and rerun the workflow for current main"
+            "inspect RTD and rerun the workflow for the current commit"
         )
     print(f"RTD build {build_id} succeeded for {sha}")
+
+
+def main() -> None:
+    """Publish only main, verify assets, and monitor the triggered build."""
+    sha = git("rev-parse", "HEAD")
+    if git("ls-remote", "origin", "refs/heads/main").split()[0] != sha:
+        print("Main has advanced; skipping stale publication")
+        return
+    if set(git("diff", "--name-only", "HEAD").splitlines()) - {"pixi.lock"}:
+        raise ValueError("Refusing publication from a modified checkout")
+    publish_assets(bundle(), f"docs-output-{sha}", sha)
+    # The workflow's non-cancelling concurrency lock covers this whole wait.
+    project = urllib.parse.quote(os.environ["RTD_PROJECT"], safe="")
+    deadline = time.monotonic() + 2400
+    wait_idle(project, deadline)
+    if git("ls-remote", "origin", "refs/heads/main").split()[0] != sha:
+        print("Bundle uploaded; main advanced, skipping latest trigger")
+        return
+    build_version(project, "latest", sha, deadline)
 
 
 if __name__ == "__main__":
