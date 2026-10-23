@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -128,14 +129,14 @@ def resolved_versions(example: dict) -> dict[str, str]:
             ):
                 if any("git+" in source for source, _ in matches):
                     raise ValueError(
-                        f"Stale Git lock for {package}; run pixi update sequince sequince-density after the releases are available"
+                        f"Stale Git lock for {package}; run pixi update sequince sequince-density"
                     )
             versions[package] = found.pop()
     return versions
 
 
 def refresh() -> None:
-    """Resolve the latest released dependencies once per execution batch."""
+    """Resolve example dependencies once per execution batch."""
     subprocess.run(
         ["pixi", "update", "sequince", "sequince-density"],
         cwd=ROOT,
@@ -486,12 +487,21 @@ def unpack(
 
 
 def check_latest() -> None:
-    """Stop stale latest builds both before Sphinx and before RTD upload."""
+    """Stop stale latest and PR builds before Sphinx and before RTD upload."""
     if os.environ.get("READTHEDOCS_VERSION") == "latest":
         remote = git("ls-remote", "origin", "refs/heads/main").split()[0]
         if git("rev-parse", "HEAD") != remote:
             raise ValueError(
                 "Stale latest checkout: main advanced; rebuild latest"
+            )
+    elif os.environ.get("READTHEDOCS_VERSION_TYPE") == "external":
+        number = os.environ["READTHEDOCS_VERSION"]
+        if not number.isascii() or not number.isdigit():
+            raise ValueError("Invalid Read the Docs PR number")
+        remote = git("ls-remote", "origin", f"refs/pull/{number}/head")
+        if not remote or git("rev-parse", "HEAD") != remote.split()[0]:
+            raise ValueError(
+                "Stale PR checkout: head advanced; rebuild preview"
             )
 
 
@@ -501,16 +511,30 @@ def fetch() -> None:
     sha = git("rev-parse", "HEAD")
     # No credentials: RTD Community and these assets must be publicly readable.
     name = f"docs-outputs-{sha}.tar.gz"
-    base = (
-        f"https://github.com/{REPOSITORY}/releases/download/docs-output-{sha}"
-    )
+    tag = f"docs-output-{sha}"
+    external = os.environ.get("READTHEDOCS_VERSION_TYPE") == "external"
+    if external:
+        number = os.environ["READTHEDOCS_VERSION"]
+        if not number.isascii() or not number.isdigit():
+            raise ValueError("Invalid Read the Docs PR number")
+        tag = f"docs-pr-{number}-{sha}"
+    base = f"https://github.com/{REPOSITORY}/releases/download/{tag}"
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / name
         for suffix in ("", ".sha256"):
-            with urllib.request.urlopen(
-                base + "/" + name + suffix, timeout=60
-            ) as response:
-                Path(str(path) + suffix).write_bytes(response.read())
+            try:
+                with urllib.request.urlopen(
+                    base + "/" + name + suffix, timeout=60
+                ) as response:
+                    Path(str(path) + suffix).write_bytes(response.read())
+            except urllib.error.HTTPError as error:
+                if external and not suffix and error.code == 404:
+                    print(
+                        "PR outputs are not published yet; GitHub Actions "
+                        "will request a preview after publication."
+                    )
+                    raise SystemExit(183) from error
+                raise
         expected = Path(str(path) + ".sha256").read_text().split()
         if expected != [digest(path), name]:
             raise ValueError("Downloaded bundle checksum mismatch")

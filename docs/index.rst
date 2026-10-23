@@ -54,5 +54,5 @@ dependencies.
 For background and the full interface reference, see Sequince's
 `user guide <https://sequince.readthedocs.io/en/latest/user_guide.html>`_
 and `API reference <https://sequince.readthedocs.io/en/latest/api/index.html>`_.
-The examples use :external:py:class:`sequince.ParticleState` to represent the
+The examples use :external:py:class:`~sequince.state.ParticleState` to represent the
 weighted particle population.

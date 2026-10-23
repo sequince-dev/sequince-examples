@@ -43,8 +43,9 @@ Keep local `main` for upstream changes and develop on separate branches. Install
 [Pixi](https://pixi.prefix.dev/latest/installation/), then run:
 
 ```bash
-make -C docs setup
-pixi run --locked -e check pre-commit install
+pixi update sequince sequince-density
+pixi install -e default -e docs -e check
+pixi run -e check pre-commit install
 ```
 
 Dependencies, environments, and tasks are defined in `pyproject.toml`.
@@ -82,15 +83,18 @@ Avoid retaining unnecessary histories or adding expensive diagnostics by default
 Before requesting review, run:
 
 ```bash
-make -C docs check
-make -C docs hooks
+pixi run -e check test
+pixi run -e check lint
+pixi run -e check format-check
+pixi run -e check pre-commit run --all-files
 ```
 
-The first command runs pytest, Ruff linting, and formatting checks. Pre-commit
-also checks spelling, whitespace, YAML, and large files, and may modify files.
-Review any edits and rerun the checks. Do not bypass hooks to make commits pass.
-The configurations in `pyproject.toml` and `.pre-commit-config.yaml` are
-authoritative; this repository does not currently configure mypy.
+These commands run pytest, Ruff linting and formatting checks, and pre-commit.
+Pre-commit also checks spelling, whitespace, YAML, and large files, and may
+modify files. Review any edits and rerun the checks. Do not bypass hooks to make
+commits pass. The configurations in `pyproject.toml` and
+`.pre-commit-config.yaml` are authoritative; this repository does not currently
+configure mypy.
 
 Tests live in `tests/`. Test observable behavior and numerical invariants, using
 small fixed inputs or mocked execution for pipeline tests. Some tests require
@@ -106,30 +110,52 @@ directly in the tutorial, with explanations and the relevant source code. The
 reading order in `docs/index.rst` starts with basic examples, then introduces
 other methods, with flow preconditioning before persistent sampling.
 
-Documentation commands run from the repository root:
+Run documentation commands from the repository root. To generate outputs for
+one example, select its declared environment:
 
 ```bash
-make -C docs help
-make -C docs example EXAMPLE=gaussian
-make -C docs example EXAMPLE=flow-preconditioning ENV=flow
-make -C docs examples
-make -C docs docs
-make -C docs docs-only
-make -C docs validate
+pixi run -e default example gaussian
+pixi run -e flow example flow-preconditioning
 ```
 
-`example` runs one manifest entry; `examples` runs all entries sequentially in
-their declared environments. Each execution batch resolves released dependencies
-once and uses the same lock throughout. `docs` refreshes dependencies, reuses
-valid outputs when possible, and executes examples if outputs are missing or
-stale. `docs-only` validates existing outputs and builds Sphinx HTML without
-sampling. `validate` runs checks, reruns all examples, then builds the docs.
-HTML is written to `docs/_build/html/`.
+To run all registered examples sequentially in their declared environments:
 
-Full example execution can consume substantial memory and time. Choose a single
-example when developing, and use `docs-only` when valid results are available.
-Execution has timeouts, but does not currently enforce a memory limit. Do not
-assume that parallel local execution is safe.
+```bash
+pixi run examples
+```
+
+Each execution batch resolves released dependencies once and uses the same lock
+throughout. Full example execution can consume substantial memory and time;
+choose a single example when developing. Execution has timeouts, but does not
+currently enforce a memory limit. Do not assume parallel local execution is safe.
+
+To validate existing outputs, stage the tutorial pages, and build Sphinx HTML:
+
+```bash
+pixi run -e docs docs
+```
+
+Open `docs/_build/html/index.html` in a browser to review the result. This task
+builds with warnings treated as errors and does not execute sampling. Missing or
+stale outputs cause it to stop; regenerate those outputs before building again.
+Pixi may resolve dependencies and update `pixi.lock` before running a task when
+needed.
+
+The Makefile is a standard Sphinx interface, matching Sequince's documentation.
+It supports builders such as `html`, `linkcheck`, and `clean`; `docs` is an alias
+for `html`. It does not install dependencies, run checks, or execute examples.
+To use Make, stage validated outputs first and run it in the docs environment:
+
+```bash
+pixi run -e docs prepare-docs
+pixi run -e docs make -C docs html SPHINXOPTS="-W --keep-going"
+```
+
+Use `pixi run -e docs make -C docs help` to list Sphinx targets. The Pixi `docs`
+task above performs preparation and the HTML build together.
+
+For full validation, run the checks listed above, then run `pixi run examples`
+and `pixi run -e docs docs`, in that order. Stop if any command fails.
 
 ### Adding an example
 
@@ -160,6 +186,14 @@ by the full source commit and trigger a Read the Docs build. Read the Docs
 installs `docs/requirements.txt`, fetches the exact matching bundle, and verifies
 it before building; it does not run sampling. Freshness checks guard `latest`
 builds, and there is no fallback to results from another commit.
+
+Pull requests run examples and build Sphinx at the PR head commit, matching
+Read the Docs previews. After a successful run, the separate
+`Publish PR documentation` workflow runs trusted code from the default branch.
+It reads the completed run's artifact as data, checks its archive and commit,
+publishes it under `docs-pr-<PR-number>-<head-SHA>`, and requests the PR preview.
+PR code and artifacts are never executed in that publishing job. Read the Docs
+then performs the same output provenance validation used for `latest`.
 
 Maintainers must configure the Read the Docs project, the repository variable
 `RTD_PROJECT`, and the secret `RTD_TOKEN` before enabling this hosting workflow.

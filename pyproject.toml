@@ -22,6 +22,7 @@ sequince = { version = "*", extras = ["corner", "hdf5"] }
 
 [tool.pixi.feature.jax.pypi-dependencies]
 jax = ">0.5.3"
+blackjax = ">=1.2"
 
 [tool.pixi.feature.jax.activation.env]
 JAX_PLATFORMS = "cpu"
@@ -30,7 +31,8 @@ JAX_PLATFORMS = "cpu"
 pytorch-cpu = "*"
 
 [tool.pixi.feature.flow.pypi-dependencies]
-sequince-density = { version = "*", extras = ["zuko"] }
+# Use the public repository until sequince-density is released on PyPI.
+sequince-density = { git = "https://github.com/sequince-dev/sequince-density.git", branch = "main", extras = ["zuko"] }
 
 [tool.pixi.feature.docs.dependencies]
 sphinx = "8.2.*"

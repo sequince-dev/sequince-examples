@@ -16,6 +16,70 @@ import docs_pipeline as pipeline  # noqa: E402
 read_resolved_versions = pipeline.resolved_versions
 
 
+@pytest.mark.parametrize(
+    ("external", "status", "suffix", "cancel"),
+    [
+        (True, 404, "", True),
+        (False, 404, "", False),
+        (True, 403, "", False),
+        (True, 404, ".sha256", False),
+    ],
+)
+def test_pending_pr_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+    external: bool,
+    status: int,
+    suffix: str,
+    cancel: bool,
+) -> None:
+    """Only a missing PR bundle cancels; broken published assets still fail."""
+    from urllib.error import HTTPError
+
+    monkeypatch.setenv(
+        "READTHEDOCS_VERSION_TYPE", "external" if external else "branch"
+    )
+    monkeypatch.setenv("READTHEDOCS_VERSION", "17" if external else "latest")
+    monkeypatch.setattr(pipeline, "git", lambda *args: "a" * 40)
+    monkeypatch.setattr(pipeline, "check_latest", lambda: None)
+
+    def download(url: str, **kwargs: object) -> io.BytesIO:
+        tag = "docs-pr-17-" if external else "docs-output-"
+        assert f"/releases/download/{tag}{'a' * 40}/" in url
+        if not suffix or url.endswith(suffix):
+            raise HTTPError(url, status, "unavailable", {}, None)
+        return io.BytesIO(b"bundle")
+
+    monkeypatch.setattr(pipeline.urllib.request, "urlopen", download)
+    if cancel:
+        with pytest.raises(SystemExit) as error:
+            pipeline.fetch()
+        assert error.value.code == 183
+    else:
+        with pytest.raises(HTTPError):
+            pipeline.fetch()
+
+
+def test_fetch_pr_restores_exact_bundle(
+    outputs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fetch a PR's actual archive through the full provenance checks."""
+    monkeypatch.setattr(pipeline, "BUNDLES", tmp_path)
+    monkeypatch.setattr(pipeline, "GENERATED", tmp_path / "generated")
+    path = pipeline.bundle()
+    data = path.read_bytes()
+    checksum = Path(str(path) + ".sha256").read_bytes()
+    monkeypatch.setenv("READTHEDOCS_VERSION_TYPE", "external")
+    monkeypatch.setenv("READTHEDOCS_VERSION", "17")
+
+    def download(url: str, **kwargs: object) -> io.BytesIO:
+        assert f"/docs-pr-17-{'a' * 40}/" in url
+        return io.BytesIO(checksum if url.endswith(".sha256") else data)
+
+    monkeypatch.setattr(pipeline.urllib.request, "urlopen", download)
+    pipeline.fetch()
+    assert (pipeline.GENERATED / "results/gaussian/metadata.json").is_file()
+
+
 @pytest.fixture(autouse=True)
 def release_versions(monkeypatch: pytest.MonkeyPatch) -> None:
     """Use synthetic release versions; no unavailable packages are resolved."""
@@ -138,6 +202,21 @@ def test_latest_checkout_guard(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
     )
     with pytest.raises(ValueError, match="Stale latest checkout"):
+        pipeline.check_latest()
+
+
+def test_pr_checkout_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("READTHEDOCS_VERSION", "17")
+    monkeypatch.setenv("READTHEDOCS_VERSION_TYPE", "external")
+
+    def git(*args: str) -> str:
+        if args[0] == "ls-remote":
+            assert args[-1] == "refs/pull/17/head"
+            return "b" * 40
+        return "a" * 40
+
+    monkeypatch.setattr(pipeline, "git", git)
+    with pytest.raises(ValueError, match="Stale PR checkout"):
         pipeline.check_latest()
 
 

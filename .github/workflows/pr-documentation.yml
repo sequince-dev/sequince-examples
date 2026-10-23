@@ -1,0 +1,35 @@
+name: Publish PR documentation
+on:
+  workflow_run:
+    workflows: [Example documentation]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: read
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'sequince-dev/sequince-examples' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    concurrency:
+      group: examples-rtd-pr-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
+    steps:
+      # workflow_run uses trusted default-branch code. Never check out the PR
+      # or execute files from its artifacts in this credential-bearing job.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Publish bundle and rebuild PR preview
+        run: python3 scripts/publish_pr_docs.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RTD_TOKEN: ${{ secrets.RTD_TOKEN }}
+          RTD_PROJECT: ${{ vars.RTD_PROJECT }}
