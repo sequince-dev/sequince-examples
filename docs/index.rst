@@ -36,6 +36,15 @@ and observation-conditioned proposals with a Kalman-filter reference.
 
    _generated/examples/particle_filtering/README
 
+Use the array backend examples to run differential evolution with NumPy, CuPy, or PyTorch,
+and to compile an SMC iteration with JAX's functional API.
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Array backends
+
+   array_backends
+
 The basic, adaptive mutation, flow preconditioning, persistent sampling, and
 waste-free SMC, and particle-filtering tutorials include plots alongside their
 explanations. Their
