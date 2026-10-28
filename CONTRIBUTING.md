@@ -177,29 +177,11 @@ plots and staging directories.
 
 ### CI and hosting
 
-The documentation workflow resolves one execution lock and shares it across
-parallel example jobs. It collects outputs from that same workflow run, runs
-checks, builds Sphinx, and uploads HTML and a validated output bundle.
-
-Trusted runs on `main` can attach the bundle to a dedicated GitHub release keyed
-by the full source commit and trigger a Read the Docs build. Read the Docs
-installs `docs/requirements.txt`, fetches the exact matching bundle, and verifies
-it before building; it does not run sampling. Freshness checks guard `latest`
-builds, and there is no fallback to results from another commit.
-
-Pull requests run examples and build Sphinx at the PR head commit, matching
-Read the Docs previews. After a successful run, the separate
-`Publish PR documentation` workflow runs trusted code from the default branch.
-It reads the completed run's artifact as data, checks its archive and commit,
-publishes it under `docs-pr-<PR-number>-<head-SHA>`, and requests the PR preview.
-PR code and artifacts are never executed in that publishing job. Read the Docs
-then performs the same output provenance validation used for `latest`.
-
-Maintainers must configure the Read the Docs project, the repository variable
-`RTD_PROJECT`, and the secret `RTD_TOKEN` before enabling this hosting workflow.
-Keep credentials out of source files and pull request jobs. The configuration
-uses standard Read the Docs hosting; private access requires a hosting service
-and account configuration that supports it.
+CI shares one execution lock across example jobs, validates their outputs, and
+builds Sphinx. The official RTD upload action publishes main as `latest`.
+PR previews, including forks, use a separate trusted workflow that validates
+artifacts without executing PR code. Stale publications are skipped; no Git
+tags or GitHub releases are created.
 
 ## Commit messages
 

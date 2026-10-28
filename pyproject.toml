@@ -34,6 +34,26 @@ pytorch-cpu = "*"
 # Use the public repository until sequince-density is released on PyPI.
 sequince-density = { git = "https://github.com/sequince-dev/sequince-density.git", branch = "main", extras = ["zuko"] }
 
+# Local research environment for the Aspire posterior-expansion examples.
+# Keep this separate from cpu/flow so released Sequince is not selected.
+[tool.pixi.feature.aspire.dependencies]
+pytest = "*"
+pytorch-cpu = "*"
+libblas = { version = "*", build = "*openblas" }
+
+[tool.pixi.feature.aspire.pypi-dependencies]
+sequince = { path = "../sequince", editable = true, extras = ["corner", "hdf5"] }
+sequince-density = { path = "../sequince-density", editable = true, extras = ["zuko", "gmm"] }
+aspire-inference = { version = ">=0.1.0", extras = ["torch", "minipcn"] }
+
+[tool.pixi.feature.aspire.activation.env]
+MPLBACKEND = "Agg"
+
+[tool.pixi.feature.aspire.tasks]
+aspire-multimodal = "python examples/aspire_analyses/multimodal.py"
+aspire-broadening = "python examples/aspire_analyses/broadening_example.py"
+aspire-initial = "python examples/aspire_analyses/initial_example.py"
+
 [tool.pixi.feature.docs.dependencies]
 sphinx = "8.2.*"
 sphinx-book-theme = "1.1.*"
@@ -47,6 +67,7 @@ pytest = "*"
 default = { features = ["cpu"], solve-group = "cpu" }
 jax = { features = ["cpu", "jax"], solve-group = "cpu" }
 flow = ["cpu", "flow"]
+aspire = ["aspire"]
 docs = ["docs"]
 check = ["check"]
 
