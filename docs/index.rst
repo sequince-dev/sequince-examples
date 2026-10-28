@@ -56,3 +56,11 @@ For background and the full interface reference, see Sequince's
 and `API reference <https://sequince.readthedocs.io/en/latest/api/index.html>`_.
 The examples use :external:py:class:`~sequince.state.ParticleState` to represent the
 weighted particle population.
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Related Packages
+   :hidden:
+
+   sequince <https://sequince.readthedocs.io/en/latest/>
+   sequince-density <https://sequince.readthedocs.io/projects/sequince-density/en/latest/>
