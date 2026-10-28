@@ -1,4 +1,4 @@
-"""Publish PR bundles as data using only trusted default-branch code."""
+"""Prepare PR artifacts as data using only trusted default-branch code."""
 
 from __future__ import annotations
 
@@ -8,18 +8,21 @@ import io
 import json
 import os
 import re
+import stat
 import subprocess
 import tarfile
 import tempfile
-import time
-import urllib.parse
 import zipfile
 from pathlib import Path
 
-from docs_pipeline import REPOSITORY, ROOT, digest, git
-from publish_docs import build_version, gh, publish_assets, wait_idle
+from docs_pipeline import REPOSITORY, ROOT, digest
 
 MAX_BYTES = 128 * 1024 * 1024
+
+
+def gh(*args: str) -> str:
+    """Read GitHub data without executing files from the PR artifact."""
+    return subprocess.check_output(["gh", *args], cwd=ROOT, text=True).strip()
 
 
 def api(path: str) -> dict | list:
@@ -88,18 +91,18 @@ def verify_bundle(path: Path, sha: str) -> None:
         raise ValueError("PR bundle manifest/commit/checksum mismatch")
 
 
-def download_bundle(run_id: int, sha: str, destination: Path) -> Path:
-    """Read only the named artifact from this run into an isolated directory."""
+def download_artifact(run_id: int, name: str, destination: Path) -> Path:
+    """Download one bounded artifact from the exact completed workflow run."""
     artifacts = api(f"actions/runs/{run_id}/artifacts?per_page=100")
     matches = [
         item
         for item in artifacts["artifacts"]
-        if item["name"] == "validated-bundle" and not item["expired"]
+        if item["name"] == name and not item["expired"]
     ]
     if len(matches) != 1 or matches[0]["size_in_bytes"] > MAX_BYTES:
         raise ValueError("Missing, ambiguous or oversized PR artifact")
     artifact_id = int(matches[0]["id"])
-    zipped = destination / "artifact.zip"
+    zipped = destination / f"{name}.zip"
     with zipped.open("wb") as stream:
         subprocess.run(
             [
@@ -113,6 +116,12 @@ def download_bundle(run_id: int, sha: str, destination: Path) -> Path:
         )
     if zipped.stat().st_size > MAX_BYTES:
         raise ValueError("Oversized PR artifact download")
+    return zipped
+
+
+def download_bundle(run_id: int, sha: str, destination: Path) -> Path:
+    """Validate the example provenance bundle from the completed run."""
+    zipped = download_artifact(run_id, "validated-bundle", destination)
     path = destination / f"docs-outputs-{sha}.tar.gz"
     expected = {path.name, path.name + ".sha256"}
     with zipfile.ZipFile(zipped) as archive:
@@ -132,8 +141,47 @@ def download_bundle(run_id: int, sha: str, destination: Path) -> Path:
     return path
 
 
+def download_html(run_id: int, destination: Path) -> Path:
+    """Extract static HTML as data, rejecting unsafe or oversized archives."""
+    zipped = download_artifact(run_id, "documentation-html", destination)
+    html = destination / "html"
+    with zipfile.ZipFile(zipped) as archive:
+        members = archive.infolist()
+        names = set()
+        if (
+            len(members) > 10000
+            or sum(member.file_size for member in members) > MAX_BYTES
+        ):
+            raise ValueError("Oversized PR HTML artifact")
+        # Validate all paths before writing. Never preserve executable modes,
+        # create links, or extract files into the trusted source checkout.
+        for member in members:
+            name = Path(member.filename)
+            mode = member.external_attr >> 16
+            if (
+                name.is_absolute()
+                or ".." in name.parts
+                or str(name) != member.filename.rstrip("/")
+                or "\\" in member.filename
+                or str(name) in names
+                or stat.S_IFMT(mode) not in {0, stat.S_IFREG, stat.S_IFDIR}
+            ):
+                raise ValueError("Unsafe PR HTML artifact")
+            names.add(str(name))
+        for member in members:
+            target = html / member.filename
+            if member.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(archive.read(member))
+    if not (html / "index.html").is_file():
+        raise ValueError("PR HTML artifact is missing index.html")
+    return html
+
+
 def main() -> None:
-    """Publish successful current PR runs, then request their RTD preview."""
+    """Prepare a current PR's HTML and metadata for the official RTD action."""
     event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
     run_id = int(event["workflow_run"]["id"])
     run = api(f"actions/runs/{run_id}")
@@ -152,23 +200,21 @@ def main() -> None:
         print("PR closed or advanced; skipping stale publication")
         return
     number = int(pr["number"])
-    with tempfile.TemporaryDirectory(prefix="pr-docs-") as tmp:
-        path = download_bundle(run_id, sha, Path(tmp))
-        current = current_pr(sha)
-        if current is None or current["number"] != number:
-            print("PR changed; skipping stale publication")
-            return
-        # Tag only the trusted checkout; PR data has a separate release namespace.
-        publish_assets(
-            path, f"docs-pr-{number}-{sha}", git("rev-parse", "HEAD")
-        )
-    project = urllib.parse.quote(os.environ["RTD_PROJECT"], safe="")
-    deadline = time.monotonic() + 2400
-    wait_idle(project, deadline)
-    if current_pr(sha) is None:
-        print("Bundle uploaded; PR closed or advanced, skipping preview")
+    # Keep the HTML until the following action finishes; the hosted runner
+    # removes its temporary directory after the job.
+    directory = Path(
+        tempfile.mkdtemp(prefix="pr-docs-", dir=os.environ["RUNNER_TEMP"])
+    )
+    download_bundle(run_id, sha, directory)
+    html = download_html(run_id, directory)
+    current = current_pr(sha)
+    if current is None or current["number"] != number:
+        print("PR changed; skipping stale publication")
         return
-    build_version(project, str(number), sha, deadline)
+    with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+        output.write(
+            f"ready=true\nversion={number}\ncommit={sha}\nhtml={html}\n"
+        )
 
 
 if __name__ == "__main__":

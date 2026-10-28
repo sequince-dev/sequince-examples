@@ -6,7 +6,7 @@ on:
 
 permissions:
   actions: read
-  contents: write
+  contents: read
   pull-requests: read
 
 jobs:
@@ -21,15 +21,30 @@ jobs:
       group: examples-rtd-pr-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
       cancel-in-progress: false
     steps:
-      # workflow_run uses trusted default-branch code. Never check out the PR
-      # or execute files from its artifacts in this credential-bearing job.
+      # workflow_run checks out trusted default-branch code, never PR code.
+      # Treat the downloaded artifacts as data and never execute their files.
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Publish bundle and rebuild PR preview
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Validate artifacts and prepare PR preview
+        id: preview
         run: python3 scripts/publish_pr_docs.py
         env:
           GH_TOKEN: ${{ github.token }}
-          RTD_TOKEN: ${{ secrets.RTD_TOKEN }}
-          RTD_PROJECT: ${{ vars.RTD_PROJECT }}
+      - name: Upload PR preview to Read the Docs
+        if: steps.preview.outputs.ready == 'true'
+        # Same pinned beta revision as the main documentation workflow.
+        uses: readthedocs/upload-action@f1f5bac5fc97073927100367d8a5bb22587e1e16
+        with:
+          token: ${{ secrets.READTHEDOCS_TOKEN }}
+          project-slug: ${{ vars.RTD_PROJECT }}
+          html: ${{ steps.preview.outputs.html }}
+          # workflow_run metadata describes the default branch, so override it
+          # with the validated PR metadata rather than relying on inference.
+          version-name: ${{ steps.preview.outputs.version }}
+          version-type: external
+          commit: ${{ steps.preview.outputs.commit }}

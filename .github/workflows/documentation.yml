@@ -127,28 +127,29 @@ jobs:
         with:
           name: documentation-html
           path: docs/_build/html/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
 
   publish:
     needs: documentation
-    if: github.repository == 'sequince-dev/sequince-examples' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    # All PR previews are published by the trusted workflow_run workflow.
+    if: >-
+      github.repository == 'sequince-dev/sequince-examples' &&
+      github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 55
     concurrency:
       group: examples-rtd-latest
       cancel-in-progress: false
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/setup-python@v5
         with:
-          name: execution-lock
-          path: .
+          python-version: "3.13"
       - uses: actions/download-artifact@v4
         with:
           name: validated-bundle
@@ -165,9 +166,36 @@ jobs:
           assert Path(str(path) + '.sha256').read_text().split() == [digest(path), path.name]
           unpack(path, sha, OUTPUT)
           PY
-      - name: Publish durable assets and wait for RTD
-        run: python3 scripts/publish_docs.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: documentation-html
+          path: docs/_build/html
+      - name: Check publication is current
+        id: publication
         env:
-          GH_TOKEN: ${{ github.token }}
-          RTD_TOKEN: ${{ secrets.RTD_TOKEN }}
-          RTD_PROJECT: ${{ vars.RTD_PROJECT }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          sys.path.insert(0, 'scripts')
+          from docs_pipeline import git
+          number = os.environ['PR_NUMBER']
+          ref = f'refs/pull/{number}/head' if number else 'refs/heads/main'
+          remote = git('ls-remote', 'origin', ref).split()
+          current = bool(remote) and remote[0] == git('rev-parse', 'HEAD')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'current={str(current).lower()}\n')
+          if not current:
+              print('Source advanced; skipping stale publication')
+          PY
+      - name: Upload HTML to Read the Docs
+        if: steps.publication.outputs.current == 'true'
+        # Pinned beta revision; upstream has not published the documented v1 tag.
+        uses: readthedocs/upload-action@f1f5bac5fc97073927100367d8a5bb22587e1e16
+        with:
+          token: ${{ secrets.READTHEDOCS_TOKEN }}
+          project-slug: ${{ vars.RTD_PROJECT }}
+          html: docs/_build/html
+          # Keep the existing latest URL.
+          version-name: latest
