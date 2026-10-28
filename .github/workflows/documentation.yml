@@ -164,7 +164,8 @@ jobs:
           sha = git('rev-parse', 'HEAD')
           path = ROOT / 'build-docs' / f'docs-outputs-{sha}.tar.gz'
           assert Path(str(path) + '.sha256').read_text().split() == [digest(path), path.name]
-          unpack(path, sha, OUTPUT)
+          # Validate against the lock used to generate these outputs.
+          unpack(path, sha, OUTPUT, restore_lock=True)
           PY
       - uses: actions/download-artifact@v4
         with:
