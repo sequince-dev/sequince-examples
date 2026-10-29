@@ -2,7 +2,8 @@ Waste-free sequential Monte Carlo
 =================================
 
 :download:`run_waste_free_smc.py <run_waste_free_smc.py>` demonstrates waste-free
-sequential Monte Carlo (SMC), as described by `Dau & Chopin`_, alongside a
+sequential Monte Carlo (SMC), as described by `Dau and Chopin (2022)`_
+in *Waste-free sequential Monte Carlo*, alongside a
 standard resample-move SMC run. Both sample a four-dimensional correlated
 Gaussian likelihood with a uniform prior on ``[-10, 10]^4``.
 
@@ -82,4 +83,4 @@ The target densities and complete sampler setup are shown below:
    :language: python
    :linenos:
 
-.. _Dau & Chopin: https://arxiv.org/abs/2011.02328
+.. _Dau and Chopin (2022): https://doi.org/10.1111/rssb.12475

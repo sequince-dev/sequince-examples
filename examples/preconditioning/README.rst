@@ -74,4 +74,4 @@ Example plots
    :language: python
    :linenos:
 
-.. _Karamanis et al. (2022): https://arxiv.org/abs/2207.05652
+.. _Karamanis et al. (2022): https://doi.org/10.1093/mnras/stac2272
