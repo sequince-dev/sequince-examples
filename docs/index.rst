@@ -51,6 +51,11 @@ explanations. Their
 run metadata identifies the source revision, parameters, seed, and pinned
 dependencies.
 
+When using these examples in research, follow the
+`software and algorithm citation guidelines
+<https://sequince.readthedocs.io/en/latest/citation.html>`_ for Sequince and
+any additional packages and methods used.
+
 For background and the full interface reference, see Sequince's
 `user guide <https://sequince.readthedocs.io/en/latest/user_guide.html>`_
 and `API reference <https://sequince.readthedocs.io/en/latest/api/index.html>`_.
